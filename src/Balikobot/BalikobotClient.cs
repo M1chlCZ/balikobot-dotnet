@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text;
+using System.Text.Json;
 using Balikobot.Codes;
 
 namespace Balikobot;
@@ -11,8 +12,11 @@ public sealed class BalikobotClient : IDisposable
     private const int ApiKeyLimit = 4096;
     private const int MaxResponseBytesLimit = 1 << 30;
     private static readonly char[] HostSeparators = ['/', '\\', '@', '?', '#'];
+    private static readonly TimeSpan AccountModeCacheTtl = TimeSpan.FromMinutes(5);
 
     private readonly bool _ownsHttpClient;
+    private readonly SemaphoreSlim _accountModeLock = new(1, 1);
+    private DateTimeOffset? _accountVerifiedAt;
     private bool _disposed;
 
     /// <summary>Initializes a client from the configuration.</summary>
@@ -256,7 +260,8 @@ public sealed class BalikobotClient : IDisposable
         }
         catch (RequestFailureException exception)
         {
-            throw ShipmentWire.Error(exception.Kind == RequestFailureKind.ConnectionRefusedOrDns
+            throw ShipmentWire.Error(exception.Kind is RequestFailureKind.ConnectionRefusedOrDns
+                or RequestFailureKind.AccountUnverified
                 ? BalikobotError.Unavailable
                 : BalikobotError.Ambiguous);
         }
@@ -365,7 +370,8 @@ public sealed class BalikobotClient : IDisposable
         }
         catch (RequestFailureException exception)
         {
-            throw ShipmentWire.Error(exception.Kind == RequestFailureKind.ConnectionRefusedOrDns
+            throw ShipmentWire.Error(exception.Kind is RequestFailureKind.ConnectionRefusedOrDns
+                or RequestFailureKind.AccountUnverified
                 ? BalikobotError.Unavailable
                 : BalikobotError.Ambiguous);
         }
@@ -720,7 +726,8 @@ public sealed class BalikobotClient : IDisposable
         }
         catch (RequestFailureException exception)
         {
-            throw ShipmentWire.Error(exception.Kind == RequestFailureKind.ConnectionRefusedOrDns
+            throw ShipmentWire.Error(exception.Kind is RequestFailureKind.ConnectionRefusedOrDns
+                or RequestFailureKind.AccountUnverified
                 ? BalikobotError.Unavailable
                 : BalikobotError.Ambiguous);
         }
@@ -802,7 +809,8 @@ public sealed class BalikobotClient : IDisposable
         }
         catch (RequestFailureException exception)
         {
-            throw ShipmentWire.Error(exception.Kind == RequestFailureKind.ConnectionRefusedOrDns
+            throw ShipmentWire.Error(exception.Kind is RequestFailureKind.ConnectionRefusedOrDns
+                or RequestFailureKind.AccountUnverified
                 ? BalikobotError.Unavailable
                 : BalikobotError.Ambiguous);
         }
@@ -874,9 +882,11 @@ public sealed class BalikobotClient : IDisposable
                 PickupWire.RequestBody(carrier, request),
                 cancellationToken).ConfigureAwait(false);
         }
-        catch (RequestFailureException)
+        catch (RequestFailureException exception)
         {
-            throw ShipmentWire.Error(BalikobotError.Ambiguous);
+            throw ShipmentWire.Error(exception.Kind == RequestFailureKind.AccountUnverified
+                ? BalikobotError.Rejected
+                : BalikobotError.Ambiguous);
         }
 
         if (response.Status != 200)
@@ -907,6 +917,353 @@ public sealed class BalikobotClient : IDisposable
         }
 
         return new PickupResult { ProviderId = providerId, Confirmed = confirmed.Value };
+    }
+
+    /// <summary>Calls the WHOAMI method and returns the account information.</summary>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <returns>The account information.</returns>
+    /// <exception cref="BalikobotException">
+    /// The provider is temporarily unavailable (<see cref="BalikobotError.Unavailable"/>) or the provider
+    /// answer violates the protocol (<see cref="BalikobotError.InvalidResponse"/>).
+    /// </exception>
+    public async Task<WhoAmI> WhoAmIAsync(CancellationToken cancellationToken = default)
+    {
+        var wire = await CapabilityGetAsync<WhoAmIWire>("/info/whoami", false, cancellationToken)
+            .ConfigureAwait(false) ??
+            throw ShipmentWire.Error(BalikobotError.InvalidResponse);
+
+        var carriers = new List<WhoAmICarrier>(wire.Carriers?.Count ?? 0);
+        foreach (var entry in wire.Carriers ?? [])
+        {
+            carriers.Add(new WhoAmICarrier
+            {
+                Slug = CarrierCode.FromWire(entry?.Slug ?? string.Empty),
+                Name = entry?.Name ?? string.Empty,
+            });
+        }
+
+        return new WhoAmI
+        {
+            Status = wire.Status?.Value ?? 0,
+            LiveAccount = wire.LiveAccount,
+            Carriers = carriers,
+        };
+    }
+
+    /// <summary>Calls the ACTIVATEDSERVICES method of one carrier and returns the normalized activated services.</summary>
+    /// <param name="carrier">The carrier code.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <returns>The activated services. When the provider reports that parcel shipping is inactive, the service list is empty.</returns>
+    /// <exception cref="BalikobotException">
+    /// The request is invalid (<see cref="BalikobotError.InvalidRequest"/>), the provider is temporarily
+    /// unavailable (<see cref="BalikobotError.Unavailable"/>), or the provider answer violates the protocol
+    /// (<see cref="BalikobotError.InvalidResponse"/>).
+    /// </exception>
+    public async Task<ActivatedServices> ActivatedServicesAsync(
+        CarrierCode carrier,
+        CancellationToken cancellationToken = default)
+    {
+        if (carrier.Value is not { } carrierCode || !CarrierCode.IsValid(carrierCode))
+        {
+            throw ShipmentWire.Error(BalikobotError.InvalidRequest);
+        }
+
+        var wire = await CapabilityGetAsync<ActivatedServicesCapabilityResponse>(
+            "/" + carrierCode + "/activatedservices",
+            false,
+            cancellationToken).ConfigureAwait(false) ??
+            throw ShipmentWire.Error(BalikobotError.InvalidResponse);
+
+        var (services, _) = CapabilityWire.NormalizeActivatedServices(wire);
+        return new ActivatedServices
+        {
+            ActiveParcel = wire.ActiveParcel,
+            Services = services,
+        };
+    }
+
+    /// <summary>Calls the COUNTRIES4SERVICE method of one carrier and returns the supported destination countries per service. Every country sent by the provider is kept.</summary>
+    /// <param name="carrier">The carrier code.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <returns>The destination countries of every activated service.</returns>
+    /// <exception cref="BalikobotException">
+    /// The request is invalid (<see cref="BalikobotError.InvalidRequest"/>), the provider is temporarily
+    /// unavailable (<see cref="BalikobotError.Unavailable"/>), or the provider answer violates the protocol
+    /// (<see cref="BalikobotError.InvalidResponse"/>).
+    /// </exception>
+    public async Task<IReadOnlyList<ServiceCountries>> CountriesAsync(
+        CarrierCode carrier,
+        CancellationToken cancellationToken = default)
+    {
+        if (carrier.Value is not { } carrierCode || !CarrierCode.IsValid(carrierCode))
+        {
+            throw ShipmentWire.Error(BalikobotError.InvalidRequest);
+        }
+
+        var wire = await CapabilityGetAsync<CountriesCapabilityResponse>(
+            "/" + carrierCode + "/countries4service",
+            false,
+            cancellationToken).ConfigureAwait(false) ??
+            throw ShipmentWire.Error(BalikobotError.InvalidResponse);
+
+        var entries = wire.ServiceTypes ?? [];
+        if (entries.Count > CapabilityWire.ServiceLimit)
+        {
+            throw ShipmentWire.Error(BalikobotError.InvalidResponse);
+        }
+
+        var result = new List<ServiceCountries>(entries.Count);
+        foreach (var entry in entries)
+        {
+            if (entry is null ||
+                !CapabilityWire.TryReadServiceEntry(
+                    entry.ServiceType,
+                    entry.Countries?.Count ?? 0,
+                    out var code))
+            {
+                throw ShipmentWire.Error(BalikobotError.InvalidResponse);
+            }
+
+            var countries = new List<CountryCode>(entry.Countries?.Count ?? 0);
+            foreach (var rawCountry in entry.Countries ?? [])
+            {
+                countries.Add(CountryCode.FromWire((rawCountry ?? string.Empty).Trim().ToUpperInvariant()));
+            }
+
+            result.Add(new ServiceCountries { ServiceType = code, Countries = countries });
+        }
+
+        return result;
+    }
+
+    /// <summary>Calls the COD4SERVICES method of one carrier and returns the normalized cash-on-delivery destinations per service. Every country sent by the provider is kept.</summary>
+    /// <param name="carrier">The carrier code.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <returns>The cash-on-delivery destinations of every service. A carrier without the optional dictionary returns an empty list.</returns>
+    /// <exception cref="BalikobotException">
+    /// The request is invalid (<see cref="BalikobotError.InvalidRequest"/>), the provider is temporarily
+    /// unavailable (<see cref="BalikobotError.Unavailable"/>), or the provider answer violates the protocol
+    /// (<see cref="BalikobotError.InvalidResponse"/>).
+    /// </exception>
+    public async Task<IReadOnlyList<ServiceCOD>> CodAsync(
+        CarrierCode carrier,
+        CancellationToken cancellationToken = default)
+    {
+        if (carrier.Value is not { } carrierCode || !CarrierCode.IsValid(carrierCode))
+        {
+            throw ShipmentWire.Error(BalikobotError.InvalidRequest);
+        }
+
+        var wire = await CapabilityGetAsync<CodCapabilityResponse>(
+            "/" + carrierCode + "/cod4services",
+            true,
+            cancellationToken).ConfigureAwait(false);
+        if (wire is null)
+        {
+            return [];
+        }
+
+        var entries = wire.ServiceTypes ?? [];
+        if (entries.Count > CapabilityWire.ServiceLimit)
+        {
+            throw ShipmentWire.Error(BalikobotError.InvalidResponse);
+        }
+
+        var result = new List<ServiceCOD>(entries.Count);
+        foreach (var entry in entries)
+        {
+            if (entry is null ||
+                !CapabilityWire.TryReadServiceEntry(
+                    entry.ServiceType,
+                    entry.Countries?.Count ?? 0,
+                    out var code))
+            {
+                throw ShipmentWire.Error(BalikobotError.InvalidResponse);
+            }
+
+            result.Add(new ServiceCOD
+            {
+                ServiceType = code,
+                Countries = CapabilityWire.NormalizeCodCountries(entry.Countries),
+            });
+        }
+
+        return result;
+    }
+
+    /// <summary>Discovers the contracted carriers and their activated services in one run. Without a scope it discovers every carrier of the account; an explicit empty scope discovers none.</summary>
+    /// <param name="scope">The carriers to discover, or <see langword="null"/> to discover every contracted carrier. Every requested carrier must belong to the account.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <returns>The discovered carriers with their services, restricted to EU destinations.</returns>
+    /// <exception cref="BalikobotException">
+    /// The provider is temporarily unavailable (<see cref="BalikobotError.Unavailable"/>) or the provider
+    /// answer violates the protocol (<see cref="BalikobotError.InvalidResponse"/>).
+    /// </exception>
+    public async Task<IReadOnlyList<Carrier>> CarrierCapabilitiesAsync(
+        IReadOnlyList<CarrierCode>? scope,
+        CancellationToken cancellationToken = default)
+    {
+        WhoAmIWire whoami;
+        await _accountModeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            whoami = await RefreshWhoAmIAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _accountModeLock.Release();
+        }
+
+        var carriers = CapabilityWire.ScopedCapabilityCarriers(whoami.Carriers, scope);
+        var result = new List<Carrier>(carriers.Count);
+        foreach (var carrier in carriers)
+        {
+            var activated = await CapabilityGetAsync<ActivatedServicesCapabilityResponse>(
+                "/" + carrier.CarrierCode + "/activatedservices",
+                false,
+                cancellationToken).ConfigureAwait(false) ??
+                throw ShipmentWire.Error(BalikobotError.InvalidResponse);
+            var countries = await CapabilityGetAsync<CountriesCapabilityResponse>(
+                "/" + carrier.CarrierCode + "/countries4service",
+                false,
+                cancellationToken).ConfigureAwait(false) ??
+                throw ShipmentWire.Error(BalikobotError.InvalidResponse);
+
+            var services = CapabilityWire.NormalizeCapabilities(
+                activated,
+                countries,
+                new CodCapabilityResponse());
+            result.Add(new Carrier { CarrierCode = carrier.CarrierCode, Services = services });
+        }
+
+        return result;
+    }
+
+    internal async Task VerifyWriteAllowedAsync(CancellationToken cancellationToken)
+    {
+        if (LiveAccount is null)
+        {
+            return;
+        }
+
+        if (AccountVerifiedRecently())
+        {
+            return;
+        }
+
+        await _accountModeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (AccountVerifiedRecently())
+            {
+                return;
+            }
+
+            try
+            {
+                await RefreshWhoAmIAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (BalikobotException exception)
+            {
+                throw new RequestFailureException(RequestFailureKind.AccountUnverified, exception);
+            }
+        }
+        finally
+        {
+            _accountModeLock.Release();
+        }
+    }
+
+    internal async Task<T?> CapabilityGetAsync<T>(
+        string path,
+        bool allowUnsupported,
+        CancellationToken cancellationToken = default)
+        where T : class, ICapabilityStatusResponse
+    {
+        RawResponse response;
+        try
+        {
+            response = await Wire.RequestAsync(this, HttpMethod.Get, path, null, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (RequestFailureException)
+        {
+            throw ShipmentWire.Error(BalikobotError.Unavailable);
+        }
+
+        if (allowUnsupported && response.Status == 501)
+        {
+            return null;
+        }
+
+        if (response.Status is 429 || response.Status >= 500)
+        {
+            throw ShipmentWire.Error(BalikobotError.Unavailable);
+        }
+
+        if (response.Status != 200 || !Wire.IsJson(response))
+        {
+            throw ShipmentWire.Error(BalikobotError.InvalidResponse);
+        }
+
+        T? decoded;
+        try
+        {
+            decoded = JsonSerializer.Deserialize<T>(response.Body, CapabilityWire.JsonOptions);
+        }
+        catch (JsonException)
+        {
+            throw ShipmentWire.Error(BalikobotError.InvalidResponse);
+        }
+        catch (NotSupportedException)
+        {
+            throw ShipmentWire.Error(BalikobotError.InvalidResponse);
+        }
+
+        if (decoded is null)
+        {
+            throw ShipmentWire.Error(BalikobotError.InvalidResponse);
+        }
+
+        if (decoded.Status is not { Value: 200 })
+        {
+            if (allowUnsupported && decoded.Status is { Value: 501 })
+            {
+                return null;
+            }
+
+            throw ShipmentWire.Error(BalikobotError.InvalidResponse);
+        }
+
+        return decoded;
+    }
+
+    private async Task<WhoAmIWire> RefreshWhoAmIAsync(CancellationToken cancellationToken)
+    {
+        _accountVerifiedAt = null;
+        var whoami = await CapabilityGetAsync<WhoAmIWire>("/info/whoami", false, cancellationToken)
+            .ConfigureAwait(false) ??
+            throw ShipmentWire.Error(BalikobotError.InvalidResponse);
+
+        if (LiveAccount is { } expected)
+        {
+            if (whoami.LiveAccount is null || whoami.LiveAccount != expected)
+            {
+                throw ShipmentWire.Error(BalikobotError.InvalidResponse);
+            }
+
+            _accountVerifiedAt = DateTimeOffset.UtcNow;
+        }
+
+        return whoami;
+    }
+
+    private bool AccountVerifiedRecently()
+    {
+        var now = DateTimeOffset.UtcNow;
+        return _accountVerifiedAt is { } verifiedAt &&
+            now >= verifiedAt &&
+            now - verifiedAt < AccountModeCacheTtl;
     }
 
     private static bool IsValidService(string service)

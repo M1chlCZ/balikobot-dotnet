@@ -13,6 +13,7 @@ internal enum RequestFailureKind
     Timeout,
     ConnectionRefusedOrDns,
     BodyLimit,
+    AccountUnverified,
 }
 
 internal sealed class RequestFailureException : Exception
@@ -40,6 +41,11 @@ internal static class Wire
         object? body,
         CancellationToken cancellationToken)
     {
+        if (method != HttpMethod.Get)
+        {
+            await client.VerifyWriteAllowedAsync(cancellationToken).ConfigureAwait(false);
+        }
+
         using var request = new HttpRequestMessage(method, client.BaseUrl + "/" + path.TrimStart('/'));
         request.Headers.TryAddWithoutValidation("Accept", "application/json");
         request.Headers.TryAddWithoutValidation("Authorization", client.Authorization);
