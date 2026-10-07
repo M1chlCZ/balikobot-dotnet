@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/examples/">
+    <Project Path="examples/Balikobot.Example/Balikobot.Example.csproj" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/Balikobot/Balikobot.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Balikobot.Tests/Balikobot.Tests.csproj" />
+  </Folder>
+</Solution>

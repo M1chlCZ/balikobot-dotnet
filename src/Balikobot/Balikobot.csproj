@@ -1,0 +1,18 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <PackageId>Balikobot</PackageId>
+    <Version>0.1.0</Version>
+    <Authors>M1chlCZ</Authors>
+    <Description>A C#/.NET client for the Balikobot shipping API v2: packages, labels, tracking, pickups, and carrier capabilities.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/M1chlCZ/balikobot-dotnet</RepositoryUrl>
+    <PackageTags>balikobot;shipping;api;client</PackageTags>
+  </PropertyGroup>
+
+</Project>
