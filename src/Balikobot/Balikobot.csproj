@@ -15,4 +15,8 @@
     <PackageTags>balikobot;shipping;api;client</PackageTags>
   </PropertyGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Balikobot.Tests" />
+  </ItemGroup>
+
 </Project>
