@@ -579,6 +579,336 @@ public sealed class BalikobotClient : IDisposable
         return await ShipmentWire.DownloadLabelAsync(this, labelUrl, cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>Gets the latest provider tracking status of one package. The call is read-only, so transport failures are safe to retry.</summary>
+    /// <param name="carrier">The carrier code.</param>
+    /// <param name="carrierId">The carrier tracking number.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <returns>The raw provider status.</returns>
+    /// <exception cref="BalikobotException">
+    /// The request is invalid (<see cref="BalikobotError.InvalidRequest"/>), the provider has no tracking
+    /// data yet (<see cref="BalikobotError.NotFound"/>), the provider permanently rejected the request
+    /// (<see cref="BalikobotError.Rejected"/>), the provider is temporarily unavailable
+    /// (<see cref="BalikobotError.Unavailable"/>), or the provider answer violates the protocol
+    /// (<see cref="BalikobotError.InvalidResponse"/>).
+    /// </exception>
+    public async Task<TrackStatusResult> TrackStatusAsync(
+        CarrierCode carrier,
+        string carrierId,
+        CancellationToken cancellationToken = default)
+    {
+        if (carrier.Value is not { } carrierCode ||
+            !CarrierCode.IsValid(carrierCode) ||
+            carrierId is null ||
+            !ShipmentWire.ValidPackageId(carrierId))
+        {
+            throw ShipmentWire.Error(BalikobotError.InvalidRequest);
+        }
+
+        RawResponse response;
+        try
+        {
+            response = await Wire.RequestAsync(
+                this,
+                HttpMethod.Post,
+                "/" + carrierCode + "/trackstatus",
+                new { carrier_ids = new[] { carrierId } },
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (RequestFailureException)
+        {
+            throw ShipmentWire.Error(BalikobotError.Unavailable);
+        }
+
+        if (TrackingWire.TrackHttpStatus(response) is { } statusError)
+        {
+            throw statusError;
+        }
+
+        if (!TrackingWire.TryDecodeTrackStatus(response.Body, out var status, out var packages))
+        {
+            throw ShipmentWire.Error(BalikobotError.InvalidResponse);
+        }
+
+        if (status is { } topStatus)
+        {
+            switch (topStatus)
+            {
+                case 200:
+                    break;
+                case 426 or 503:
+                    throw ShipmentWire.Error(BalikobotError.Unavailable);
+                case 404:
+                    throw ShipmentWire.Error(BalikobotError.NotFound);
+                default:
+                    throw ShipmentWire.Error(BalikobotError.InvalidResponse);
+            }
+        }
+
+        if (packages.Count != 1 || packages[0].CarrierId != carrierId)
+        {
+            throw ShipmentWire.Error(BalikobotError.InvalidResponse);
+        }
+
+        var entry = packages[0];
+        if (entry.Status is null && (status is null || entry.Name.Length == 0))
+        {
+            throw ShipmentWire.Error(BalikobotError.InvalidResponse);
+        }
+
+        var effectiveStatus = entry.Status;
+        if (effectiveStatus is null)
+        {
+            effectiveStatus = status;
+        }
+
+        switch (effectiveStatus)
+        {
+            case 200:
+                var id = entry.StatusIdV2.Set ? entry.StatusIdV2 : entry.StatusId;
+                var description = entry.Name.Length > 0 ? entry.Name : entry.StatusText;
+                if (!id.Set || description.Length == 0 ||
+                    !ShipmentWire.ValidField(description, TrackingWire.DescriptionLimit))
+                {
+                    throw ShipmentWire.Error(BalikobotError.InvalidResponse);
+                }
+
+                return new TrackStatusResult { StatusId = id.Raw, StatusText = description };
+            case 404:
+                throw ShipmentWire.Error(BalikobotError.NotFound);
+            case 426 or 503:
+                throw ShipmentWire.Error(BalikobotError.Unavailable);
+            case 400 or 403 or 405 or 406 or 409 or 413 or 423:
+                throw ShipmentWire.Error(BalikobotError.Rejected);
+            default:
+                throw ShipmentWire.Error(BalikobotError.InvalidResponse);
+        }
+    }
+
+    /// <summary>Hands one package over to the carrier batch with the ORDER method. ORDER is idempotent on package ids: a repeated closure of the same dataset returns status 208 with the original order id, so an idempotent retry after an ambiguous answer replays the original record instead of closing the package twice.</summary>
+    /// <param name="carrier">The carrier code.</param>
+    /// <param name="packageId">The Balíkobot package reference.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <returns>The provider batch reference.</returns>
+    /// <exception cref="BalikobotException">
+    /// The request is invalid (<see cref="BalikobotError.InvalidRequest"/>), the provider permanently
+    /// rejected the request (<see cref="BalikobotError.Rejected"/>), the provider is temporarily
+    /// unavailable (<see cref="BalikobotError.Unavailable"/>), or the request may have reached the
+    /// provider (<see cref="BalikobotError.Ambiguous"/>).
+    /// </exception>
+    public async Task<OrderResult> OrderBatchAsync(
+        CarrierCode carrier,
+        string packageId,
+        CancellationToken cancellationToken = default)
+    {
+        if (carrier.Value is not { } carrierCode ||
+            !CarrierCode.IsValid(carrierCode) ||
+            packageId is null ||
+            !ShipmentWire.ValidPackageId(packageId))
+        {
+            throw ShipmentWire.Error(BalikobotError.InvalidRequest);
+        }
+
+        RawResponse response;
+        try
+        {
+            response = await Wire.RequestAsync(
+                this,
+                HttpMethod.Post,
+                "/" + carrierCode + "/order",
+                new { package_ids = new[] { packageId } },
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (RequestFailureException exception)
+        {
+            throw ShipmentWire.Error(exception.Kind == RequestFailureKind.ConnectionRefusedOrDns
+                ? BalikobotError.Unavailable
+                : BalikobotError.Ambiguous);
+        }
+
+        if (response.Status == 429)
+        {
+            throw ShipmentWire.Unavailable(Wire.RetryAfter(response));
+        }
+
+        if (response.Status >= 500)
+        {
+            throw ShipmentWire.Error(BalikobotError.Unavailable);
+        }
+
+        if (response.Status != 200 || !Wire.IsJson(response))
+        {
+            throw ShipmentWire.Error(response.Status is >= 200 and < 300
+                ? BalikobotError.Ambiguous
+                : response.Status is >= 400 and < 500
+                    ? BalikobotError.Rejected
+                    : BalikobotError.InvalidResponse);
+        }
+
+        if (!TrackingWire.TryDecodeOrder(response.Body, out var status, out var orderId) || status is null)
+        {
+            throw ShipmentWire.Error(BalikobotError.Ambiguous);
+        }
+
+        switch (status.Value)
+        {
+            case 200 or 208:
+                if (!ShipmentWire.ValidPackageId(orderId))
+                {
+                    throw ShipmentWire.Error(BalikobotError.Ambiguous);
+                }
+
+                return new OrderResult { OrderId = orderId };
+            case 426 or 503:
+                throw ShipmentWire.Error(BalikobotError.Unavailable);
+            case 400 or 402 or 403 or 404 or 405 or 406 or 409 or 413 or 423:
+                throw ShipmentWire.Error(BalikobotError.Rejected);
+            default:
+                throw ShipmentWire.Error(BalikobotError.Ambiguous);
+        }
+    }
+
+    /// <summary>Drops one package that has not entered ORDER with the DROP method. A body status 404 means the package is already gone and the call succeeds. An ambiguous DROP answer must be reconciled through OVERVIEW before any retry.</summary>
+    /// <param name="carrier">The carrier code.</param>
+    /// <param name="packageId">The Balíkobot package reference.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <exception cref="BalikobotException">
+    /// The request is invalid (<see cref="BalikobotError.InvalidRequest"/>), the provider permanently
+    /// rejected the request (<see cref="BalikobotError.Rejected"/>), the provider is temporarily
+    /// unavailable (<see cref="BalikobotError.Unavailable"/>), or the request may have reached the
+    /// provider (<see cref="BalikobotError.Ambiguous"/>).
+    /// </exception>
+    public async Task DropPackageAsync(
+        CarrierCode carrier,
+        string packageId,
+        CancellationToken cancellationToken = default)
+    {
+        if (carrier.Value is not { } carrierCode ||
+            !CarrierCode.IsValid(carrierCode) ||
+            packageId is null ||
+            !ShipmentWire.ValidPackageId(packageId))
+        {
+            throw ShipmentWire.Error(BalikobotError.InvalidRequest);
+        }
+
+        RawResponse response;
+        try
+        {
+            response = await Wire.RequestAsync(
+                this,
+                HttpMethod.Post,
+                "/" + carrierCode + "/drop",
+                new { package_ids = new[] { packageId } },
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (RequestFailureException exception)
+        {
+            throw ShipmentWire.Error(exception.Kind == RequestFailureKind.ConnectionRefusedOrDns
+                ? BalikobotError.Unavailable
+                : BalikobotError.Ambiguous);
+        }
+
+        if (response.Status == 429)
+        {
+            throw ShipmentWire.Unavailable(Wire.RetryAfter(response));
+        }
+
+        if (response.Status >= 500)
+        {
+            throw ShipmentWire.Error(BalikobotError.Unavailable);
+        }
+
+        if (response.Status != 200 || !Wire.IsJson(response))
+        {
+            throw ShipmentWire.Error(response.Status is >= 200 and < 300
+                ? BalikobotError.Ambiguous
+                : response.Status is >= 400 and < 500
+                    ? BalikobotError.Rejected
+                    : BalikobotError.InvalidResponse);
+        }
+
+        if (!TrackingWire.TryDecodeDrop(response.Body, out var status) || status is null)
+        {
+            throw ShipmentWire.Error(BalikobotError.Ambiguous);
+        }
+
+        switch (status.Value)
+        {
+            case 200 or 404:
+                return;
+            case 426 or 503:
+                throw ShipmentWire.Error(BalikobotError.Unavailable);
+            case 400 or 402 or 403 or 405 or 406 or 409 or 413 or 423:
+                throw ShipmentWire.Error(BalikobotError.Rejected);
+            default:
+                throw ShipmentWire.Error(BalikobotError.Ambiguous);
+        }
+    }
+
+    /// <summary>Books one physical collection with the ORDERPICKUP method, separately from the shipment data handover performed by ORDER. The call performs exactly one HTTP attempt. DPD and DPDCZ take the collection address from the carrier configuration; PPL also defaults its contact information to that configuration.</summary>
+    /// <param name="carrier">The carrier code: DPD, DPDCZ or PPL.</param>
+    /// <param name="request">The collection booking.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <returns>The confirmed collection booking.</returns>
+    /// <exception cref="BalikobotException">
+    /// The carrier or the data was rejected locally (<see cref="BalikobotError.Rejected"/>), the provider
+    /// permanently rejected the booking (<see cref="BalikobotError.Rejected"/>), or the request may have
+    /// reached the provider (<see cref="BalikobotError.Ambiguous"/>).
+    /// </exception>
+    public async Task<PickupResult> OrderPickupAsync(
+        CarrierCode carrier,
+        PickupRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        if (!PickupWire.ValidPickupRequest(carrier, request))
+        {
+            throw ShipmentWire.Error(BalikobotError.Rejected);
+        }
+
+        RawResponse response;
+        try
+        {
+            response = await Wire.RequestAsync(
+                this,
+                HttpMethod.Post,
+                "/" + carrier.Value + "/orderpickup",
+                PickupWire.RequestBody(carrier, request),
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (RequestFailureException)
+        {
+            throw ShipmentWire.Error(BalikobotError.Ambiguous);
+        }
+
+        if (response.Status != 200)
+        {
+            throw PickupWire.PickupStatusError(response.Status);
+        }
+
+        if (!Wire.IsJson(response) ||
+            !PickupWire.TryDecode(response.Body, out var status, out var providerId, out var confirmed) ||
+            status is null)
+        {
+            throw ShipmentWire.Error(BalikobotError.Ambiguous);
+        }
+
+        if (status.Value != 200)
+        {
+            throw PickupWire.PickupStatusError(status.Value);
+        }
+
+        if (carrier != CarrierCode.PPL)
+        {
+            return new PickupResult { ProviderId = string.Empty, Confirmed = true };
+        }
+
+        if (confirmed is null || !ShipmentWire.ValidPackageId(providerId))
+        {
+            throw ShipmentWire.Error(BalikobotError.Ambiguous);
+        }
+
+        return new PickupResult { ProviderId = providerId, Confirmed = confirmed.Value };
+    }
+
     private static bool IsValidService(string service)
     {
         if (service.Length is < 1 or > 16)
