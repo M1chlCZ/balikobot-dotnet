@@ -142,6 +142,21 @@ The client reads every JSON body with a hard limit of 8 MiB. Set
 fixed limit of 4 MiB. The client refuses redirects. It checks the response
 `Content-Type` before it decodes the body.
 
+## Custom HTTP client
+
+Set `BalikobotConfig.HttpClient` to use a client that the caller owns. The
+library never disposes an injected client. It cannot clone the instance, so the
+caller must configure it before use:
+
+- Set `AllowAutoRedirect` to `false` on the handler. An injected client must
+  refuse redirects, because a redirect can send the credentials to another
+  origin.
+- Set `HttpClient.Timeout` on the client. `BalikobotConfig.Timeout` applies
+  only to the client that the library creates.
+
+The library uses the injected client as it is. The response limit and the label
+checks stay active.
+
 ## Account mode
 
 Set `BalikobotConfig.LiveAccount` to `true` or `false` to verify the account
@@ -156,6 +171,47 @@ base URL origin for a loopback test server. The default allowlist accepts every
 `https` URL on `balikobot.cz` or a subdomain. Set `BalikobotConfig.LabelHosts`
 to replace the default allowlist with other hosts. A leading dot selects a
 subdomain suffix match. It does not match the bare domain.
+
+## Parity notes
+
+The library follows the Go reference client with a few accepted differences:
+
+- Cancellation propagates as `OperationCanceledException`. The library does not
+  wrap it in a `BalikobotException`.
+- JSON property matching is case-sensitive.
+- The transport uses the platform defaults. It sets no connection attempt cap
+  and no minimum TLS version.
+- The test suite is minimal. The tests cover the mapping rules with local HTTP
+  servers. They do not cover every provider answer.
+
+## Releasing
+
+The package publishes with NuGet Trusted Publishing. The repository stores no
+API key.
+
+One-time setup on nuget.org:
+
+1. Sign in to nuget.org.
+2. Open Trusted Publishing.
+3. Add a policy with these values:
+   - Package owner: your account
+   - Repository owner: `M1chlCZ`
+   - Repository: `balikobot-dotnet`
+   - Workflow file: `publish.yml`
+   - Environment: empty
+
+One-time setup in GitHub:
+
+1. Open the repository settings.
+2. Select Secrets and variables, then Actions, then the Variables tab.
+3. Add the repository variable `NUGET_USER` with your nuget.org username.
+
+To publish a release:
+
+1. Create a GitHub release with a tag, for example `v0.1.0`.
+2. The `publish` workflow builds, tests, packs, and pushes the package.
+
+You can also run the `publish` workflow manually from the Actions tab.
 
 ## Development
 

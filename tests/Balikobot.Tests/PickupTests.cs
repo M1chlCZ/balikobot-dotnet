@@ -61,6 +61,20 @@ public class PickupTests
     }
 
     [Fact]
+    public async Task OrderPickupRejectsANullNoteWithoutARequest()
+    {
+        var handler = new FakeHandler(_ => Json("{}"));
+        using var httpClient = new HttpClient(handler);
+        using var client = CreateClient(httpClient);
+
+        var exception = await Assert.ThrowsAsync<BalikobotException>(
+            () => client.OrderPickupAsync(CarrierCode.DPD, Request() with { Note = null! }));
+
+        Assert.Equal(BalikobotError.Rejected, exception.Error);
+        Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
     public async Task OrderPickupRequiresThePplConfirmationFlag()
     {
         var handler = new FakeHandler(_ => Json(

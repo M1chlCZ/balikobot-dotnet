@@ -110,6 +110,21 @@ public class CapabilitiesTests
     }
 
     [Fact]
+    public async Task CodAsyncTreatsAnOversized501BodyAsAnEmptyDictionary()
+    {
+        var handler = new FakeHandler(_ => new HttpResponseMessage(HttpStatusCode.NotImplemented)
+        {
+            Content = new StringContent(new string('a', 64), Encoding.UTF8, "application/json"),
+        });
+        using var httpClient = new HttpClient(handler);
+        using var client = CreateClient(httpClient, maxResponseBytes: 10);
+
+        var services = await client.CodAsync(CarrierCode.ZASILKOVNA);
+
+        Assert.Empty(services);
+    }
+
+    [Fact]
     public async Task CarrierCapabilitiesAsyncAggregatesServicesAndKeepsEuCountries()
     {
         var handler = new FakeHandler(request => request.RequestUri!.AbsolutePath switch
@@ -190,13 +205,14 @@ public class CapabilitiesTests
         Assert.Equal(BalikobotError.InvalidResponse, exception.Error);
     }
 
-    private static BalikobotClient CreateClient(HttpClient httpClient)
+    private static BalikobotClient CreateClient(HttpClient httpClient, int maxResponseBytes = 0)
     {
         return new BalikobotClient(new BalikobotConfig
         {
             BaseUrl = BaseUrl,
             User = "api-user",
             ApiKey = "provider-secret",
+            MaxResponseBytes = maxResponseBytes,
             HttpClient = httpClient,
         });
     }

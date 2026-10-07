@@ -16,7 +16,7 @@ public sealed class BalikobotClient : IDisposable
 
     private readonly bool _ownsHttpClient;
     private readonly SemaphoreSlim _accountModeLock = new(1, 1);
-    private DateTimeOffset? _accountVerifiedAt;
+    private long _accountVerifiedAtTicks;
     private bool _disposed;
 
     /// <summary>Initializes a client from the configuration.</summary>
@@ -24,7 +24,7 @@ public sealed class BalikobotClient : IDisposable
     /// <exception cref="BalikobotException">The configuration is invalid.</exception>
     public BalikobotClient(BalikobotConfig config)
     {
-        var user = config.User.Trim();
+        var user = (config.User ?? string.Empty).Trim();
         if (user.Length == 0 || Encoding.UTF8.GetByteCount(user) > UserLimit)
         {
             throw new BalikobotException(
@@ -32,7 +32,9 @@ public sealed class BalikobotClient : IDisposable
                 "balikobot: invalid configuration: user is required and limited to 100 bytes");
         }
 
-        if (config.ApiKey.Length == 0 || Encoding.UTF8.GetByteCount(config.ApiKey) > ApiKeyLimit)
+        if (config.ApiKey is null ||
+            config.ApiKey.Length == 0 ||
+            Encoding.UTF8.GetByteCount(config.ApiKey) > ApiKeyLimit)
         {
             throw new BalikobotException(
                 BalikobotError.Config,
@@ -104,6 +106,12 @@ public sealed class BalikobotClient : IDisposable
     internal bool? LiveAccount { get; }
 
     /// <summary>Releases the owned HTTP client. A caller-owned client is left untouched.</summary>
+    /// <remarks>
+    /// The method disposes only the client that this instance created. The client from
+    /// <see cref="BalikobotConfig.HttpClient"/> belongs to the caller and is never disposed here.
+    /// After this call the instance must not be used again: a request that needs the disposed owned
+    /// transport throws <see cref="ObjectDisposedException"/>.
+    /// </remarks>
     public void Dispose()
     {
         if (_disposed)
@@ -183,7 +191,7 @@ public sealed class BalikobotClient : IDisposable
         var branches = new List<Branch>(decoded.Count);
         foreach (var branch in decoded)
         {
-            if (filterCountry && branch.Country.Value.Length > 0 && branch.Country != country)
+            if (filterCountry && branch.Country.Value is { Length: > 0 } && branch.Country != country)
             {
                 continue;
             }
@@ -248,6 +256,15 @@ public sealed class BalikobotClient : IDisposable
             throw ShipmentWire.Error(BalikobotError.InvalidRequest);
         }
 
+        var normalized = request with
+        {
+            RecName = EmptyToNull(request.RecName),
+            RecFirm = EmptyToNull(request.RecFirm),
+            RecPhone = EmptyToNull(request.RecPhone),
+            RecEmail = EmptyToNull(request.RecEmail),
+            BranchId = EmptyToNull(request.BranchId),
+        };
+
         RawResponse response;
         try
         {
@@ -255,7 +272,7 @@ public sealed class BalikobotClient : IDisposable
                 this,
                 HttpMethod.Post,
                 "/" + carrierCode + "/add",
-                new { packages = new[] { request } },
+                new { packages = new[] { normalized } },
                 cancellationToken).ConfigureAwait(false);
         }
         catch (RequestFailureException exception)
@@ -1240,7 +1257,7 @@ public sealed class BalikobotClient : IDisposable
 
     private async Task<WhoAmIWire> RefreshWhoAmIAsync(CancellationToken cancellationToken)
     {
-        _accountVerifiedAt = null;
+        Interlocked.Exchange(ref _accountVerifiedAtTicks, 0);
         var whoami = await CapabilityGetAsync<WhoAmIWire>("/info/whoami", false, cancellationToken)
             .ConfigureAwait(false) ??
             throw ShipmentWire.Error(BalikobotError.InvalidResponse);
@@ -1252,7 +1269,7 @@ public sealed class BalikobotClient : IDisposable
                 throw ShipmentWire.Error(BalikobotError.InvalidResponse);
             }
 
-            _accountVerifiedAt = DateTimeOffset.UtcNow;
+            Interlocked.Exchange(ref _accountVerifiedAtTicks, DateTimeOffset.UtcNow.UtcTicks);
         }
 
         return whoami;
@@ -1260,10 +1277,20 @@ public sealed class BalikobotClient : IDisposable
 
     private bool AccountVerifiedRecently()
     {
-        var now = DateTimeOffset.UtcNow;
-        return _accountVerifiedAt is { } verifiedAt &&
-            now >= verifiedAt &&
-            now - verifiedAt < AccountModeCacheTtl;
+        var verifiedAtTicks = Volatile.Read(ref _accountVerifiedAtTicks);
+        if (verifiedAtTicks == 0)
+        {
+            return false;
+        }
+
+        var nowTicks = DateTimeOffset.UtcNow.UtcTicks;
+        return nowTicks >= verifiedAtTicks &&
+            nowTicks - verifiedAtTicks < AccountModeCacheTtl.Ticks;
+    }
+
+    private static string? EmptyToNull(string? value)
+    {
+        return value is { Length: > 0 } ? value : null;
     }
 
     private static bool IsValidService(string service)

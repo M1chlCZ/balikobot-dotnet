@@ -75,6 +75,96 @@ public class ShipmentTests
     }
 
     [Fact]
+    public async Task AddPackageWithNaNWeightIsAmbiguousAndSendsNoRequest()
+    {
+        var handler = new FakeHandler(_ => Json("{}"));
+        using var httpClient = new HttpClient(handler);
+        using var client = CreateClient(httpClient);
+
+        var exception = await Assert.ThrowsAsync<BalikobotException>(
+            () => client.AddPackageAsync(CarrierCode.PPL, Request() with { WeightKg = double.NaN }));
+
+        Assert.Equal(BalikobotError.Ambiguous, exception.Error);
+        Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
+    public async Task AddPackageTreatsAnOversizedServerErrorBodyAsUnavailable()
+    {
+        var handler = new FakeHandler(_ => Bytes(new byte[64], "application/json", HttpStatusCode.InternalServerError));
+        using var httpClient = new HttpClient(handler);
+        using var client = CreateClient(httpClient, maxResponseBytes: 10);
+
+        var exception = await Assert.ThrowsAsync<BalikobotException>(
+            () => client.AddPackageAsync(CarrierCode.PPL, Request()));
+
+        Assert.Equal(BalikobotError.Unavailable, exception.Error);
+    }
+
+    [Fact]
+    public async Task AddPackageRejectsNullRequiredAddressFields()
+    {
+        var handler = new FakeHandler(_ => Json("{}"));
+        using var httpClient = new HttpClient(handler);
+        using var client = CreateClient(httpClient);
+
+        var requests = new[]
+        {
+            Request() with { RecStreet = null! },
+            Request() with { RecCity = null! },
+            Request() with { RecZip = null! },
+        };
+
+        foreach (var request in requests)
+        {
+            var exception = await Assert.ThrowsAsync<BalikobotException>(
+                () => client.AddPackageAsync(CarrierCode.PPL, request));
+            Assert.Equal(BalikobotError.InvalidRequest, exception.Error);
+        }
+
+        Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
+    public void ValidFieldTreatsNullAsInvalid()
+    {
+        Assert.False(ShipmentWire.ValidField(null!, 10));
+        Assert.False(ShipmentWire.ValidPackageId(null));
+    }
+
+    [Fact]
+    public async Task AddPackageOmitsEmptyOptionalStrings()
+    {
+        string? body = null;
+        var handler = new FakeHandler(request =>
+        {
+            body = request.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+            return Json(
+                """
+                {"status":200,"packages":[{"eid":"ORDER-0001","status":200,"package_id":"P-1",
+                "carrier_id":"TRACK-1","label_url":"http://127.0.0.1:43123/label.pdf"}]}
+                """);
+        });
+        using var httpClient = new HttpClient(handler);
+        using var client = CreateClient(httpClient);
+
+        await client.AddPackageAsync(CarrierCode.PPL, Request() with
+        {
+            RecName = "",
+            RecFirm = "F",
+            RecPhone = "",
+            RecEmail = "a@example.test",
+            BranchId = "",
+        });
+
+        Assert.DoesNotContain("\"rec_name\"", body);
+        Assert.DoesNotContain("\"rec_phone\"", body);
+        Assert.DoesNotContain("\"branch_id\"", body);
+        Assert.Contains("\"rec_firm\":\"F\"", body);
+        Assert.Contains("\"rec_email\":\"a@example.test\"", body);
+    }
+
+    [Fact]
     public async Task AddPackageSerializesTheCodesAsPlainStrings()
     {
         string? body = null;
@@ -270,13 +360,14 @@ public class ShipmentTests
         };
     }
 
-    private static BalikobotClient CreateClient(HttpClient httpClient)
+    private static BalikobotClient CreateClient(HttpClient httpClient, int maxResponseBytes = 0)
     {
         return new BalikobotClient(new BalikobotConfig
         {
             BaseUrl = BaseUrl,
             User = "api-user",
             ApiKey = "provider-secret",
+            MaxResponseBytes = maxResponseBytes,
             HttpClient = httpClient,
         });
     }
@@ -289,9 +380,12 @@ public class ShipmentTests
         };
     }
 
-    private static HttpResponseMessage Bytes(byte[] body, string mediaType)
+    private static HttpResponseMessage Bytes(
+        byte[] body,
+        string mediaType,
+        HttpStatusCode status = HttpStatusCode.OK)
     {
-        var response = new HttpResponseMessage(HttpStatusCode.OK)
+        var response = new HttpResponseMessage(status)
         {
             Content = new ByteArrayContent(body),
         };

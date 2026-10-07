@@ -71,6 +71,27 @@ public class BranchesTests
     }
 
     [Fact]
+    public async Task ObjectPayloadSortsKeysThatExceedInt32AsNumbers()
+    {
+        var handler = new FakeHandler(_ => Json(
+            """
+            {
+              "status": 200,
+              "branches": {
+                "10000000000": {"id": "A2", "name": "Pobočka B", "zip": "12000"},
+                "9999999999": {"id": "A1", "name": "Pobočka A", "zip": "11000"}
+              }
+            }
+            """));
+        using var httpClient = new HttpClient(handler);
+        using var client = CreateClient(httpClient);
+
+        var branches = await client.BranchesAsync(CarrierCode.PPL, "1", CountryCode.CZ);
+
+        Assert.Equal(new[] { "A1", "A2" }, branches.Select(branch => branch.Id));
+    }
+
+    [Fact]
     public async Task NameFallsBackToZipAndTheCountryFilterDropsForeignBranches()
     {
         var handler = new FakeHandler(_ => Json(

@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Headers;
 using System.Text;
 
 namespace Balikobot.Tests;
@@ -63,6 +64,27 @@ public class TransportTests
             "Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes("api-user:provider-secret")),
             request.Headers["Authorization"].Single());
         Assert.Equal("application/json", request.Headers["Accept"].Single());
+    }
+
+    [Fact]
+    public async Task IsJsonAcceptsAQuotedMediaTypeParameter()
+    {
+        var handler = new FakeHandler(_ =>
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent("{}"u8.ToArray()),
+            };
+            response.Content.Headers.ContentType =
+                MediaTypeHeaderValue.Parse("application/json; charset=\"utf-8\"");
+            return response;
+        });
+        using var httpClient = new HttpClient(handler);
+        using var client = CreateClient(httpClient);
+
+        var raw = await Wire.RequestAsync(client, HttpMethod.Get, "/test", null, CancellationToken.None);
+
+        Assert.True(Wire.IsJson(raw));
     }
 
     [Fact]

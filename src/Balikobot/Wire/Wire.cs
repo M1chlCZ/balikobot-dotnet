@@ -51,8 +51,17 @@ internal static class Wire
         request.Headers.TryAddWithoutValidation("Authorization", client.Authorization);
         if (body is not null)
         {
-            request.Content = new ByteArrayContent(
-                Encoding.UTF8.GetBytes(JsonSerializer.Serialize(body, body.GetType())));
+            byte[] payload;
+            try
+            {
+                payload = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(body, body.GetType()));
+            }
+            catch (Exception exception) when (exception is ArgumentException or NotSupportedException)
+            {
+                throw new RequestFailureException(RequestFailureKind.Transport, exception);
+            }
+
+            request.Content = new ByteArrayContent(payload);
             request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
         }
 
@@ -61,11 +70,14 @@ internal static class Wire
             using var response = await client.Transport
                 .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
                 .ConfigureAwait(false);
-            var bytes = await ReadLimitedBodyAsync(response.Content, client.MaxResponseBytes, cancellationToken)
-                .ConfigureAwait(false);
+            var status = (int)response.StatusCode;
+            var bytes = status == 200
+                ? await ReadLimitedBodyAsync(response.Content, client.MaxResponseBytes, cancellationToken)
+                    .ConfigureAwait(false)
+                : [];
             var contentType = response.Content.Headers.ContentType?.ToString();
 
-            return new RawResponse((int)response.StatusCode, response.Headers, bytes, contentType);
+            return new RawResponse(status, response.Headers, bytes, contentType);
         }
         catch (RequestFailureException)
         {
@@ -91,26 +103,21 @@ internal static class Wire
 
     internal static bool IsJson(RawResponse response)
     {
-        if (response.ContentType is not { } contentType)
+        return TryParseMediaType(response.ContentType, out var mediaType) &&
+            string.Equals(mediaType, "application/json", StringComparison.OrdinalIgnoreCase);
+    }
+
+    internal static bool TryParseMediaType(string? raw, out string mediaType)
+    {
+        mediaType = string.Empty;
+        if (raw is null ||
+            !MediaTypeHeaderValue.TryParse(raw, out var parsed) ||
+            parsed.MediaType is not { Length: > 0 } value)
         {
             return false;
         }
 
-        var parts = contentType.Split(';');
-        if (!parts[0].Trim().Equals("application/json", StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
-        for (var index = 1; index < parts.Length; index++)
-        {
-            var equals = parts[index].IndexOf('=');
-            if (equals <= 0 || parts[index][..equals].Trim().Length == 0)
-            {
-                return false;
-            }
-        }
-
+        mediaType = value;
         return true;
     }
 
@@ -233,23 +240,38 @@ internal static class Wire
         int limit,
         CancellationToken cancellationToken)
     {
-        await using var stream = await content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-        var buffer = new byte[Math.Min(limit + 1, ReadBufferSize)];
-        using var body = new MemoryStream();
-        while (true)
+        try
         {
-            var read = await stream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
-            if (read == 0)
+            await using var stream = await content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+            var buffer = new byte[Math.Min(limit + 1, ReadBufferSize)];
+            using var body = new MemoryStream();
+            while (true)
             {
-                return body.ToArray();
-            }
+                var read = await stream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
+                if (read == 0)
+                {
+                    return body.ToArray();
+                }
 
-            if (body.Length + read > limit)
-            {
-                throw new RequestFailureException(RequestFailureKind.BodyLimit);
-            }
+                if (body.Length + read > limit)
+                {
+                    throw new RequestFailureException(RequestFailureKind.BodyLimit);
+                }
 
-            body.Write(buffer, 0, read);
+                body.Write(buffer, 0, read);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (RequestFailureException)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            throw new RequestFailureException(RequestFailureKind.Transport, exception);
         }
     }
 

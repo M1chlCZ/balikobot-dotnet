@@ -79,8 +79,13 @@ internal static class ShipmentWire
         return true;
     }
 
-    internal static bool ValidField(string value, int maximum)
+    internal static bool ValidField(string? value, int maximum)
     {
+        if (value is null)
+        {
+            return false;
+        }
+
         var runes = 0;
         for (var index = 0; index < value.Length; index++)
         {
@@ -114,9 +119,9 @@ internal static class ShipmentWire
         return true;
     }
 
-    internal static bool ValidPackageId(string value)
+    internal static bool ValidPackageId(string? value)
     {
-        return value.Length > 0 && ValidField(value, IdentifierLimit);
+        return value is { Length: > 0 } && ValidField(value, IdentifierLimit);
     }
 
     internal static bool ValidAddRequest(AddPackageRequest request)
@@ -166,9 +171,9 @@ internal static class ShipmentWire
             }
         }
 
-        if (request.RecStreet.Length == 0 ||
-            request.RecCity.Length == 0 ||
-            request.RecZip.Length == 0 ||
+        if (request.RecStreet is not { Length: > 0 } ||
+            request.RecCity is not { Length: > 0 } ||
+            request.RecZip is not { Length: > 0 } ||
             !CountryCode.IsValid(request.RecCountry.Value))
         {
             return false;
@@ -447,10 +452,7 @@ internal static class ShipmentWire
                 throw Error(status is >= 400 and < 500 ? BalikobotError.Rejected : BalikobotError.InvalidResponse);
             }
 
-            var mediaType = response.Content.Headers.ContentType?.MediaType;
-            var pdf = string.Equals(mediaType, "application/pdf", StringComparison.OrdinalIgnoreCase);
-            var zpl = string.Equals(mediaType, "application/zpl", StringComparison.OrdinalIgnoreCase);
-            if (!pdf && !zpl)
+            if (!Wire.TryParseMediaType(response.Content.Headers.ContentType?.ToString(), out var mediaType))
             {
                 throw Error(BalikobotError.InvalidResponse);
             }
@@ -470,6 +472,13 @@ internal static class ShipmentWire
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
                 throw Error(BalikobotError.Unavailable);
+            }
+
+            var pdf = string.Equals(mediaType, "application/pdf", StringComparison.OrdinalIgnoreCase);
+            var zpl = string.Equals(mediaType, "application/zpl", StringComparison.OrdinalIgnoreCase);
+            if (!pdf && !zpl)
+            {
+                throw Error(BalikobotError.InvalidResponse);
             }
 
             if (body.Length == 0)

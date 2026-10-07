@@ -33,6 +33,12 @@ public sealed class BalikobotConfig
     /// <summary>Gets the optional account-mode expectation for mutating calls.</summary>
     public bool? LiveAccount { get; init; }
 
-    /// <summary>Gets the optional caller-owned HTTP client. The client never disposes it.</summary>
+    /// <summary>
+    /// Gets the optional caller-owned HTTP client. The client never disposes it. The library
+    /// cannot clone the instance, so the caller must configure it before reuse: the handler
+    /// must set <c>AllowAutoRedirect</c> to <see langword="false"/>, and the client must set its
+    /// own <see cref="HttpClient.Timeout"/> because <see cref="Timeout"/> applies only to the
+    /// client that the library creates.
+    /// </summary>
     public HttpClient? HttpClient { get; init; }
 }

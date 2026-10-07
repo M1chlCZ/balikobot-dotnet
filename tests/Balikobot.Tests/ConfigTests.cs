@@ -54,6 +54,25 @@ public class ConfigTests
     }
 
     [Fact]
+    public void NullCredentialsThrowConfig()
+    {
+        var userException = Assert.Throws<BalikobotException>(() => new BalikobotClient(new BalikobotConfig
+        {
+            User = null!,
+            ApiKey = "key",
+        }));
+
+        var keyException = Assert.Throws<BalikobotException>(() => new BalikobotClient(new BalikobotConfig
+        {
+            User = "api-user",
+            ApiKey = null!,
+        }));
+
+        Assert.Equal(BalikobotError.Config, userException.Error);
+        Assert.Equal(BalikobotError.Config, keyException.Error);
+    }
+
+    [Fact]
     public void InvalidConfigurationThrowsConfig()
     {
         var invalid = new[]

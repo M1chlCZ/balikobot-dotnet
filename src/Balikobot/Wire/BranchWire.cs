@@ -185,9 +185,9 @@ internal static class BranchWire
         return string.CompareOrdinal(left, right);
     }
 
-    private static bool TryNumericKey(string key, out int value)
+    private static bool TryNumericKey(string key, out long value)
     {
-        return int.TryParse(key, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out value);
+        return long.TryParse(key, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out value);
     }
 
     private static bool TryReadBranch(JsonElement element, out Branch? branch)
