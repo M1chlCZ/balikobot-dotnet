@@ -26,7 +26,7 @@ internal sealed class RequestFailureException : Exception
     internal RequestFailureKind Kind { get; }
 }
 
-internal sealed record RawResponse(int Status, HttpResponseHeaders Headers, byte[] Body);
+internal sealed record RawResponse(int Status, HttpResponseHeaders Headers, byte[] Body, string? ContentType);
 
 internal static class Wire
 {
@@ -57,12 +57,9 @@ internal static class Wire
                 .ConfigureAwait(false);
             var bytes = await ReadLimitedBodyAsync(response.Content, client.MaxResponseBytes, cancellationToken)
                 .ConfigureAwait(false);
-            foreach (var header in response.Content.Headers)
-            {
-                response.Headers.TryAddWithoutValidation(header.Key, header.Value);
-            }
+            var contentType = response.Content.Headers.ContentType?.ToString();
 
-            return new RawResponse((int)response.StatusCode, response.Headers, bytes);
+            return new RawResponse((int)response.StatusCode, response.Headers, bytes, contentType);
         }
         catch (RequestFailureException)
         {
@@ -88,12 +85,12 @@ internal static class Wire
 
     internal static bool IsJson(RawResponse response)
     {
-        if (!response.Headers.TryGetValues("Content-Type", out var values))
+        if (response.ContentType is not { } contentType)
         {
             return false;
         }
 
-        var parts = values.First().Split(';');
+        var parts = contentType.Split(';');
         if (!parts[0].Trim().Equals("application/json", StringComparison.OrdinalIgnoreCase))
         {
             return false;

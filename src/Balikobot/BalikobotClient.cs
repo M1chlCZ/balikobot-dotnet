@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text;
+using Balikobot.Codes;
 
 namespace Balikobot;
 
@@ -111,6 +112,100 @@ public sealed class BalikobotClient : IDisposable
         {
             Transport.Dispose();
         }
+    }
+
+    /// <summary>Gets the branches of one carrier service in one country.</summary>
+    /// <param name="carrier">The carrier code.</param>
+    /// <param name="service">The carrier service code, 1 to 16 ASCII letters or digits.</param>
+    /// <param name="country">The country code.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <returns>The branches offered by the carrier, filtered to the requested country when the route needs it.</returns>
+    /// <exception cref="BalikobotException">
+    /// The request is invalid (<see cref="BalikobotError.InvalidRequest"/>), the provider is
+    /// temporarily unavailable (<see cref="BalikobotError.Unavailable"/>), or the provider answer
+    /// violates the protocol (<see cref="BalikobotError.InvalidResponse"/>).
+    /// </exception>
+    public async Task<IReadOnlyList<Branch>> BranchesAsync(
+        CarrierCode carrier,
+        string service,
+        CountryCode country,
+        CancellationToken cancellationToken = default)
+    {
+        if (carrier.Value is not { } carrierCode ||
+            !CarrierCode.IsValid(carrierCode) ||
+            service is null ||
+            !IsValidService(service) ||
+            country.Value is not { } countryCode ||
+            !CountryCode.IsValid(countryCode))
+        {
+            throw new BalikobotException(BalikobotError.InvalidRequest, "balikobot: invalid request");
+        }
+
+        var (path, filterCountry) = BranchWire.BranchesPath(carrier, service, country);
+
+        RawResponse response;
+        try
+        {
+            response = await Wire.RequestAsync(this, HttpMethod.Get, path, null, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (RequestFailureException)
+        {
+            throw new BalikobotException(BalikobotError.Unavailable, "balikobot: temporarily unavailable");
+        }
+
+        if (response.Status == 429 || response.Status >= 500)
+        {
+            throw new BalikobotException(BalikobotError.Unavailable, "balikobot: temporarily unavailable");
+        }
+
+        if (response.Status != 200 ||
+            !Wire.IsJson(response) ||
+            !BranchWire.TryDecode(response.Body, out var status, out var decoded))
+        {
+            throw new BalikobotException(BalikobotError.InvalidResponse, "balikobot: invalid provider response");
+        }
+
+        if (status is 426 or 503)
+        {
+            throw new BalikobotException(BalikobotError.Unavailable, "balikobot: temporarily unavailable");
+        }
+
+        if (status != 200)
+        {
+            throw new BalikobotException(BalikobotError.InvalidResponse, "balikobot: invalid provider response");
+        }
+
+        var branches = new List<Branch>(decoded.Count);
+        foreach (var branch in decoded)
+        {
+            if (filterCountry && branch.Country.Value.Length > 0 && branch.Country != country)
+            {
+                continue;
+            }
+
+            branches.Add(branch);
+        }
+
+        return branches;
+    }
+
+    private static bool IsValidService(string service)
+    {
+        if (service.Length is < 1 or > 16)
+        {
+            return false;
+        }
+
+        foreach (var character in service)
+        {
+            if (!char.IsAsciiLetterOrDigit(character))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static IReadOnlyList<string> NormalizeLabelHosts(IReadOnlyList<string> hosts)
