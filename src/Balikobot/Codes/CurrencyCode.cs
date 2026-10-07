@@ -1,6 +1,9 @@
+using System.Text.Json.Serialization;
+
 namespace Balikobot.Codes;
 
 /// <summary>An ISO 4217 currency code used by the Balíkobot API.</summary>
+[JsonConverter(typeof(CurrencyCodeJsonConverter))]
 public readonly record struct CurrencyCode
 {
     private CurrencyCode(string value)

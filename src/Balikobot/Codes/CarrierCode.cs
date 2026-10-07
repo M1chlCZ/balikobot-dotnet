@@ -1,6 +1,9 @@
+using System.Text.Json.Serialization;
+
 namespace Balikobot.Codes;
 
 /// <summary>A carrier code used in Balíkobot request paths.</summary>
+[JsonConverter(typeof(CarrierCodeJsonConverter))]
 public readonly record struct CarrierCode
 {
     private CarrierCode(string value)

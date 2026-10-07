@@ -1,6 +1,9 @@
+using System.Text.Json.Serialization;
+
 namespace Balikobot.Codes;
 
 /// <summary>An ISO 3166-1 alpha-2 country code used by the Balíkobot API.</summary>
+[JsonConverter(typeof(CountryCodeJsonConverter))]
 public readonly record struct CountryCode
 {
     private CountryCode(string value)
