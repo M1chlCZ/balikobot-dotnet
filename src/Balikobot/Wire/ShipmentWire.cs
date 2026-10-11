@@ -460,7 +460,7 @@ internal static class ShipmentWire
             byte[] body;
             try
             {
-                body = await ReadLimitedBodyAsync(response.Content, LabelResponseLimit, cancellationToken)
+                body = await Wire.ReadLimitedBodyAsync(response.Content, LabelResponseLimit, cancellationToken)
                     .ConfigureAwait(false);
             }
             catch (RequestFailureException exception)
@@ -649,46 +649,6 @@ internal static class ShipmentWire
         }
 
         return true;
-    }
-
-    private static async Task<byte[]> ReadLimitedBodyAsync(
-        HttpContent content,
-        int limit,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            await using var stream = await content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-            var buffer = new byte[Math.Min(limit + 1, 32 * 1024)];
-            using var body = new MemoryStream();
-            while (true)
-            {
-                var read = await stream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
-                if (read == 0)
-                {
-                    return body.ToArray();
-                }
-
-                if (body.Length + read > limit)
-                {
-                    throw new RequestFailureException(RequestFailureKind.BodyLimit);
-                }
-
-                body.Write(buffer, 0, read);
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (RequestFailureException)
-        {
-            throw;
-        }
-        catch (Exception exception)
-        {
-            throw new RequestFailureException(RequestFailureKind.Transport, exception);
-        }
     }
 
     private static string Message(BalikobotError error)

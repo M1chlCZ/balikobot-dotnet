@@ -11,7 +11,7 @@ public enum BalikobotError
     Unavailable,
     /// <summary>The provider has no data yet for the requested resource.</summary>
     NotFound,
-    /// <summary>A mutating call may have reached the provider; reconcile before any retry.</summary>
+    /// <summary>A mutating call has an unknown outcome; reconcile before any retry.</summary>
     Ambiguous,
     /// <summary>The provider answer violates the protocol.</summary>
     InvalidResponse,

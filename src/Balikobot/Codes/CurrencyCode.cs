@@ -41,7 +41,7 @@ public readonly record struct CurrencyCode
     /// <summary>The Danish krone.</summary>
     public static readonly CurrencyCode DKK = new("DKK");
 
-    /// <summary>Normalizes a currency code. The value is trimmed and uppercased, so custom currencies work too.</summary>
+    /// <summary>Normalizes a currency code. The method trims the value and converts it to upper case, so custom currencies work too.</summary>
     /// <param name="value">The currency code to parse.</param>
     /// <returns>The normalized currency code.</returns>
     /// <exception cref="FormatException">The value is not a well-formed currency code.</exception>

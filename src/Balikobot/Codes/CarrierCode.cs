@@ -41,7 +41,7 @@ public readonly record struct CarrierCode
     /// <summary>The Uloženka code.</summary>
     public static readonly CarrierCode ULOZENKA = new("ulozenka");
 
-    /// <summary>Normalizes a carrier code. The value is trimmed and lowercased, so custom carriers work too.</summary>
+    /// <summary>Normalizes a carrier code. The method trims the value and converts it to lower case, so custom carriers work too.</summary>
     /// <param name="value">The carrier code to parse.</param>
     /// <returns>The normalized carrier code.</returns>
     /// <exception cref="FormatException">The value is not a well-formed carrier code.</exception>

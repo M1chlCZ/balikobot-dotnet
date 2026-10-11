@@ -97,7 +97,7 @@ public readonly record struct CountryCode
     /// <summary>Canada.</summary>
     public static readonly CountryCode CA = new("CA");
 
-    /// <summary>Normalizes a country code. The value is trimmed and uppercased, so custom countries work too.</summary>
+    /// <summary>Normalizes a country code. The method trims the value and converts it to upper case, so custom countries work too.</summary>
     /// <param name="value">The country code to parse.</param>
     /// <returns>The normalized country code.</returns>
     /// <exception cref="FormatException">The value is not a well-formed country code.</exception>

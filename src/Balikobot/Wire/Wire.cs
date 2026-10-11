@@ -235,7 +235,7 @@ internal static class Wire
         throw InvalidBaseUrl("balikobot: invalid configuration: base URL must use http or https");
     }
 
-    private static async Task<byte[]> ReadLimitedBodyAsync(
+    internal static async Task<byte[]> ReadLimitedBodyAsync(
         HttpContent content,
         int limit,
         CancellationToken cancellationToken)

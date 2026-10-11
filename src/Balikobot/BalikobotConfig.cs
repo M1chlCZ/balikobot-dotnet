@@ -15,10 +15,10 @@ public sealed class BalikobotConfig
     /// <summary>Gets the API root. Defaults to <see cref="DefaultBaseUrl"/>.</summary>
     public string BaseUrl { get; init; } = DefaultBaseUrl;
 
-    /// <summary>Gets the API user. It must not be empty and is limited to 100 bytes.</summary>
+    /// <summary>Gets the API user. It must not be empty and must not exceed 100 bytes.</summary>
     public string User { get; init; } = string.Empty;
 
-    /// <summary>Gets the API key used as the HTTP Basic password. It must not be empty and is limited to 4096 bytes.</summary>
+    /// <summary>Gets the API key used as the HTTP Basic password. It must not be empty and must not exceed 4096 bytes.</summary>
     public string ApiKey { get; init; } = string.Empty;
 
     /// <summary>Gets the whole-request timeout. Zero selects <see cref="DefaultTimeout"/>.</summary>
@@ -35,9 +35,9 @@ public sealed class BalikobotConfig
 
     /// <summary>
     /// Gets the optional caller-owned HTTP client. The client never disposes it. The library
-    /// cannot clone the instance, so the caller must configure it before reuse: the handler
-    /// must set <c>AllowAutoRedirect</c> to <see langword="false"/>, and the client must set its
-    /// own <see cref="HttpClient.Timeout"/> because <see cref="Timeout"/> applies only to the
+    /// cannot clone the instance, so the caller must configure it before reuse. The handler
+    /// must set <c>AllowAutoRedirect</c> to <see langword="false"/>. The client must set its
+    /// own <see cref="HttpClient.Timeout"/>, because <see cref="Timeout"/> applies only to the
     /// client that the library creates.
     /// </summary>
     public HttpClient? HttpClient { get; init; }

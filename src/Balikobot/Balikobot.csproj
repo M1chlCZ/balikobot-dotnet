@@ -7,7 +7,7 @@
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <PackageId>Balikobot</PackageId>
-    <Version>0.1.0</Version>
+    <Version>0.1.1</Version>
     <Authors>M1chlCZ</Authors>
     <Description>A C#/.NET client for the Balikobot shipping API v2: packages, labels, tracking, pickups, and carrier capabilities.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>

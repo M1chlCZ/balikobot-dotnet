@@ -108,7 +108,7 @@ public sealed class BalikobotClient : IDisposable
     /// <summary>Releases the owned HTTP client. A caller-owned client is left untouched.</summary>
     /// <remarks>
     /// The method disposes only the client that this instance created. The client from
-    /// <see cref="BalikobotConfig.HttpClient"/> belongs to the caller and is never disposed here.
+    /// <see cref="BalikobotConfig.HttpClient"/> belongs to the caller; this method never disposes it.
     /// After this call the instance must not be used again: a request that needs the disposed owned
     /// transport throws <see cref="ObjectDisposedException"/>.
     /// </remarks>
@@ -146,7 +146,7 @@ public sealed class BalikobotClient : IDisposable
         if (carrier.Value is not { } carrierCode ||
             !CarrierCode.IsValid(carrierCode) ||
             service is null ||
-            !IsValidService(service) ||
+            !ShipmentWire.ValidService(service) ||
             country.Value is not { } countryCode ||
             !CountryCode.IsValid(countryCode))
         {
@@ -202,7 +202,7 @@ public sealed class BalikobotClient : IDisposable
         return branches;
     }
 
-    /// <summary>Derives the branch id that ADD expects from a stored branch of a carrier. Česká pošta and Slovenská pošta use the branch ZIP without spaces, the Uloženka CP_NP service does the same, PPL strips the KM prefix, and every other carrier uses the stored branch id unchanged.</summary>
+    /// <summary>Derives the branch id that ADD expects from a stored branch of a carrier. Česká pošta and Slovenská pošta use the branch ZIP without spaces. The Uloženka CP_NP service does the same. PPL strips the KM prefix, and every other carrier uses the stored branch id unchanged.</summary>
     /// <param name="carrier">The carrier code.</param>
     /// <param name="service">The carrier service code.</param>
     /// <param name="branchId">The stored branch identifier.</param>
@@ -241,7 +241,7 @@ public sealed class BalikobotClient : IDisposable
     /// The request is invalid (<see cref="BalikobotError.InvalidRequest"/>), the provider permanently
     /// rejected the data (<see cref="BalikobotError.Rejected"/>), the provider is temporarily unavailable
     /// (<see cref="BalikobotError.Unavailable"/>), the provider answer violates the protocol
-    /// (<see cref="BalikobotError.InvalidResponse"/>), or the request may have reached the provider
+    /// (<see cref="BalikobotError.InvalidResponse"/>), or the request outcome is unknown
     /// (<see cref="BalikobotError.Ambiguous"/>).
     /// </exception>
     public async Task<AddPackageResult> AddPackageAsync(
@@ -355,14 +355,14 @@ public sealed class BalikobotClient : IDisposable
 
     /// <summary>Lists the packages of a carrier that have not been closed by ORDER yet.</summary>
     /// <param name="carrier">The carrier code.</param>
-    /// <param name="matchEid">The external reference whose integrity is required for reconciliation. A malformed entry with a different EID is skipped, while a malformed matching entry fails the call.</param>
+    /// <param name="matchEid">The external reference whose integrity is required for reconciliation. The client skips a malformed entry with a different EID, while a malformed matching entry fails the call.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>The open packages of the carrier.</returns>
     /// <exception cref="BalikobotException">
     /// The request is invalid (<see cref="BalikobotError.InvalidRequest"/>), the provider permanently
     /// rejected the request (<see cref="BalikobotError.Rejected"/>), the provider is temporarily
     /// unavailable (<see cref="BalikobotError.Unavailable"/>), the provider answer violates the protocol
-    /// (<see cref="BalikobotError.InvalidResponse"/>), or the request may have reached the provider
+    /// (<see cref="BalikobotError.InvalidResponse"/>), or the request outcome is unknown
     /// (<see cref="BalikobotError.Ambiguous"/>).
     /// </exception>
     public async Task<IReadOnlyList<OverviewPackage>> OverviewAsync(
@@ -507,7 +507,7 @@ public sealed class BalikobotClient : IDisposable
         return labelUrl;
     }
 
-    /// <summary>Retrieves the label URL of an already closed ORDER. The URL is accepted only when the response confirms both the requested order id and the membership of the requested package id.</summary>
+    /// <summary>Retrieves the label URL of an already closed ORDER. The client accepts the URL only when the response confirms both the requested order id and the membership of the requested package id.</summary>
     /// <param name="carrier">The carrier code.</param>
     /// <param name="orderId">The ORDER reference.</param>
     /// <param name="packageId">The Balíkobot package reference.</param>
@@ -580,7 +580,7 @@ public sealed class BalikobotClient : IDisposable
         return labelUrl;
     }
 
-    /// <summary>Fetches a provider label URL server to server. The body is read once with a hard byte limit and validated against the declared label media type.</summary>
+    /// <summary>Fetches a provider label URL server to server. The client reads the body once with a hard byte limit and validates it against the declared label media type.</summary>
     /// <param name="labelUrl">The provider label URL.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>The downloaded label.</returns>
@@ -707,7 +707,7 @@ public sealed class BalikobotClient : IDisposable
         }
     }
 
-    /// <summary>Hands one package over to the carrier batch with the ORDER method. ORDER is idempotent on package ids: a repeated closure of the same dataset returns status 208 with the original order id, so an idempotent retry after an ambiguous answer replays the original record instead of closing the package twice.</summary>
+    /// <summary>Hands one package over to the carrier batch with the ORDER method. ORDER is idempotent on package ids: a repeated closure of the same dataset returns status 208 with the original order id. An idempotent retry after an ambiguous answer replays the original record instead of closing the package twice.</summary>
     /// <param name="carrier">The carrier code.</param>
     /// <param name="packageId">The Balíkobot package reference.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
@@ -715,8 +715,8 @@ public sealed class BalikobotClient : IDisposable
     /// <exception cref="BalikobotException">
     /// The request is invalid (<see cref="BalikobotError.InvalidRequest"/>), the provider permanently
     /// rejected the request (<see cref="BalikobotError.Rejected"/>), the provider is temporarily
-    /// unavailable (<see cref="BalikobotError.Unavailable"/>), or the request may have reached the
-    /// provider (<see cref="BalikobotError.Ambiguous"/>).
+    /// unavailable (<see cref="BalikobotError.Unavailable"/>), or the request outcome is unknown
+    /// (<see cref="BalikobotError.Ambiguous"/>).
     /// </exception>
     public async Task<OrderResult> OrderBatchAsync(
         CarrierCode carrier,
@@ -791,15 +791,15 @@ public sealed class BalikobotClient : IDisposable
         }
     }
 
-    /// <summary>Drops one package that has not entered ORDER with the DROP method. A body status 404 means the package is already gone and the call succeeds. An ambiguous DROP answer must be reconciled through OVERVIEW before any retry.</summary>
+    /// <summary>Drops one package that has not entered ORDER with the DROP method. A body status 404 means the package is already gone and the call succeeds. The caller must reconcile an ambiguous DROP answer through OVERVIEW before any retry.</summary>
     /// <param name="carrier">The carrier code.</param>
     /// <param name="packageId">The Balíkobot package reference.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <exception cref="BalikobotException">
     /// The request is invalid (<see cref="BalikobotError.InvalidRequest"/>), the provider permanently
     /// rejected the request (<see cref="BalikobotError.Rejected"/>), the provider is temporarily
-    /// unavailable (<see cref="BalikobotError.Unavailable"/>), or the request may have reached the
-    /// provider (<see cref="BalikobotError.Ambiguous"/>).
+    /// unavailable (<see cref="BalikobotError.Unavailable"/>), or the request outcome is unknown
+    /// (<see cref="BalikobotError.Ambiguous"/>).
     /// </exception>
     public async Task DropPackageAsync(
         CarrierCode carrier,
@@ -869,15 +869,15 @@ public sealed class BalikobotClient : IDisposable
         }
     }
 
-    /// <summary>Books one physical collection with the ORDERPICKUP method, separately from the shipment data handover performed by ORDER. The call performs exactly one HTTP attempt. DPD and DPDCZ take the collection address from the carrier configuration; PPL also defaults its contact information to that configuration.</summary>
+    /// <summary>Books one physical collection with the ORDERPICKUP method, separately from the shipment data handover that ORDER performs. The call performs exactly one HTTP attempt. DPD and DPDCZ take the collection address from the carrier configuration; PPL also defaults its contact information to that configuration.</summary>
     /// <param name="carrier">The carrier code: DPD, DPDCZ or PPL.</param>
     /// <param name="request">The collection booking.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>The confirmed collection booking.</returns>
     /// <exception cref="BalikobotException">
     /// The carrier or the data was rejected locally (<see cref="BalikobotError.Rejected"/>), the provider
-    /// permanently rejected the booking (<see cref="BalikobotError.Rejected"/>), or the request may have
-    /// reached the provider (<see cref="BalikobotError.Ambiguous"/>).
+    /// permanently rejected the booking (<see cref="BalikobotError.Rejected"/>), or the request outcome is
+    /// unknown (<see cref="BalikobotError.Ambiguous"/>).
     /// </exception>
     public async Task<PickupResult> OrderPickupAsync(
         CarrierCode carrier,
@@ -999,7 +999,7 @@ public sealed class BalikobotClient : IDisposable
         };
     }
 
-    /// <summary>Calls the COUNTRIES4SERVICE method of one carrier and returns the supported destination countries per service. Every country sent by the provider is kept.</summary>
+    /// <summary>Calls the COUNTRIES4SERVICE method of one carrier and returns the supported destination countries per service. The client keeps every country that the provider sends.</summary>
     /// <param name="carrier">The carrier code.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>The destination countries of every activated service.</returns>
@@ -1053,7 +1053,7 @@ public sealed class BalikobotClient : IDisposable
         return result;
     }
 
-    /// <summary>Calls the COD4SERVICES method of one carrier and returns the normalized cash-on-delivery destinations per service. Every country sent by the provider is kept.</summary>
+    /// <summary>Calls the COD4SERVICES method of one carrier and returns the normalized cash-on-delivery destinations per service. The client keeps every country that the provider sends.</summary>
     /// <param name="carrier">The carrier code.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>The cash-on-delivery destinations of every service. A carrier without the optional dictionary returns an empty list.</returns>
@@ -1291,24 +1291,6 @@ public sealed class BalikobotClient : IDisposable
     private static string? EmptyToNull(string? value)
     {
         return value is { Length: > 0 } ? value : null;
-    }
-
-    private static bool IsValidService(string service)
-    {
-        if (service.Length is < 1 or > 16)
-        {
-            return false;
-        }
-
-        foreach (var character in service)
-        {
-            if (!char.IsAsciiLetterOrDigit(character))
-            {
-                return false;
-            }
-        }
-
-        return true;
     }
 
     private static IReadOnlyList<string> NormalizeLabelHosts(IReadOnlyList<string> hosts)

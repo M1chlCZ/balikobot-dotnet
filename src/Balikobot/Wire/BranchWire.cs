@@ -218,10 +218,10 @@ internal static class BranchWire
 
         var identifier = branchId ?? id;
         if (identifier is null ||
-            !ValidBranchField(name, BranchFieldLimit) ||
-            !ValidBranchField(street, BranchFieldLimit) ||
-            !ValidBranchField(city, BranchFieldLimit) ||
-            !ValidBranchField(zip, ZipLimit))
+            !ShipmentWire.ValidField(name, BranchFieldLimit) ||
+            !ShipmentWire.ValidField(street, BranchFieldLimit) ||
+            !ShipmentWire.ValidField(city, BranchFieldLimit) ||
+            !ShipmentWire.ValidField(zip, ZipLimit))
         {
             return true;
         }
@@ -307,31 +307,12 @@ internal static class BranchWire
             return false;
         }
 
-        if (!IsBranchId(text))
+        if (!ShipmentWire.ValidBranchId(text))
         {
             return true;
         }
 
         value = text;
-        return true;
-    }
-
-    private static bool IsBranchId(string value)
-    {
-        if (value.Length is < 1 or > 64 || !char.IsAsciiLetterOrDigit(value[0]))
-        {
-            return false;
-        }
-
-        for (var index = 1; index < value.Length; index++)
-        {
-            var character = value[index];
-            if (!char.IsAsciiLetterOrDigit(character) && character is not ('.' or '_' or '-'))
-            {
-                return false;
-            }
-        }
-
         return true;
     }
 
@@ -390,40 +371,5 @@ internal static class BranchWire
         return latitude is >= -90 and <= 90 &&
             longitude is >= -180 and <= 180 &&
             (latitude != 0 || longitude != 0);
-    }
-
-    private static bool ValidBranchField(string value, int maximum)
-    {
-        var runes = 0;
-        for (var index = 0; index < value.Length; index++)
-        {
-            var character = value[index];
-            if (character is '\r' or '\n' or '\0')
-            {
-                return false;
-            }
-
-            if (char.IsHighSurrogate(character))
-            {
-                if (index + 1 >= value.Length || !char.IsLowSurrogate(value[index + 1]))
-                {
-                    return false;
-                }
-
-                index++;
-            }
-            else if (char.IsLowSurrogate(character))
-            {
-                return false;
-            }
-
-            runes++;
-            if (runes > maximum)
-            {
-                return false;
-            }
-        }
-
-        return true;
     }
 }
