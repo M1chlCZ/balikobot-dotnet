@@ -232,6 +232,23 @@ public sealed class BalikobotClient : IDisposable
         return id;
     }
 
+    /// <summary>Parses the JSON body of a Balíkobot tracking webhook and returns one notification per status change. The body can be a single notification object or an array of objects; an empty array returns an empty result. Every entry must identify the package through <c>package_id</c>, <c>eid</c> or <c>carrier_id</c> and carry a decimal <c>status_id</c> or <c>status_id_v2</c> together with a status description in <c>name</c> or <c>status_text</c>.</summary>
+    /// <param name="body">The raw webhook body.</param>
+    /// <returns>The parsed notifications, in body order.</returns>
+    /// <exception cref="BalikobotException">
+    /// The body is empty, malformed or misses a required field, or the array holds more than
+    /// 1000 entries (<see cref="BalikobotError.InvalidResponse"/>).
+    /// </exception>
+    public static IReadOnlyList<TrackingNotification> ParseTrackingNotifications(byte[] body)
+    {
+        if (!WebhookWire.TryParseNotifications(body, out var notifications))
+        {
+            throw ShipmentWire.Error(BalikobotError.InvalidResponse);
+        }
+
+        return notifications;
+    }
+
     /// <summary>Adds one package with the ADD method. ADD is idempotent on the external reference: a repeated request with an already stored EID returns status 208 together with the original record.</summary>
     /// <param name="carrier">The carrier code.</param>
     /// <param name="request">The package to add.</param>
@@ -600,6 +617,78 @@ public sealed class BalikobotClient : IDisposable
         }
 
         return await ShipmentWire.DownloadLabelAsync(this, labelUrl, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Requests fresh labels of one or more packages that have not entered ORDER yet and downloads them in one step. A single package id returns a PDF or ZPL body; several package ids return a ZIP archive. The client accepts 1 to 1000 package ids per request and applies the label host allowlist and the fixed 4 MiB label limit.</summary>
+    /// <param name="carrier">The carrier code.</param>
+    /// <param name="packageIds">The Balíkobot package references, 1 to 1000 entries.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <returns>The downloaded label or archive.</returns>
+    /// <exception cref="BalikobotException">
+    /// The request is invalid (<see cref="BalikobotError.InvalidRequest"/>), the provider permanently
+    /// rejected the request (<see cref="BalikobotError.Rejected"/>), the provider is temporarily
+    /// unavailable (<see cref="BalikobotError.Unavailable"/>), or the provider answer violates the
+    /// protocol (<see cref="BalikobotError.InvalidResponse"/>).
+    /// </exception>
+    public async Task<DownloadedLabel> DownloadBatchLabelsAsync(
+        CarrierCode carrier,
+        IReadOnlyList<string> packageIds,
+        CancellationToken cancellationToken = default)
+    {
+        if (carrier.Value is not { } carrierCode ||
+            !CarrierCode.IsValid(carrierCode) ||
+            packageIds is null ||
+            packageIds.Count is < 1 or > ShipmentWire.LabelsPackageLimit)
+        {
+            throw ShipmentWire.Error(BalikobotError.InvalidRequest);
+        }
+
+        foreach (var packageId in packageIds)
+        {
+            if (packageId is null || !ShipmentWire.ValidPackageId(packageId))
+            {
+                throw ShipmentWire.Error(BalikobotError.InvalidRequest);
+            }
+        }
+
+        RawResponse response;
+        try
+        {
+            response = await Wire.RequestAsync(
+                this,
+                HttpMethod.Post,
+                "/" + carrierCode + "/labels",
+                new { package_ids = packageIds },
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (RequestFailureException)
+        {
+            throw ShipmentWire.Error(BalikobotError.Unavailable);
+        }
+
+        if (ShipmentWire.LabelLookupStatus(response) is { } statusError)
+        {
+            throw statusError;
+        }
+
+        if (!ShipmentWire.TryDecodeLabels(response.Body, out var status, out var labelUrl) || status is null)
+        {
+            throw ShipmentWire.Error(BalikobotError.InvalidResponse);
+        }
+
+        if (ShipmentWire.TopLevelStatusError(status.Value) is { } topError)
+        {
+            throw ShipmentWire.Error(topError);
+        }
+
+        if (!Wire.ValidLabelUrl(this, labelUrl))
+        {
+            throw ShipmentWire.Error(BalikobotError.InvalidResponse);
+        }
+
+        return await ShipmentWire
+            .FetchLabelAsync(this, labelUrl, packageIds.Count > 1, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     /// <summary>Gets the latest provider tracking status of one package. The call is read-only, so transport failures are safe to retry.</summary>

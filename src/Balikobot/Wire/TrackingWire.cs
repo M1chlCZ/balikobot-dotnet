@@ -127,7 +127,7 @@ internal static class TrackingWire
         }
     }
 
-    private static bool TryReadTrackStatusId(JsonElement element, string name, out TrackStatusId id)
+    internal static bool TryReadTrackStatusId(JsonElement element, string name, out TrackStatusId id)
     {
         id = default;
         if (!element.TryGetProperty(name, out var property))

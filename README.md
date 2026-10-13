@@ -1,8 +1,8 @@
 # Balikobot
 
 A .NET client for the Balíkobot shipping API v2. The client uses only the .NET
-base class library. It covers branches, packages, labels, tracking, pickup
-orders and account capabilities.
+base class library. It covers branches, packages, labels, batch labels,
+tracking, tracking webhooks, pickup orders and account capabilities.
 
 ## Install
 
@@ -65,6 +65,7 @@ Console.WriteLine(status.StatusText);
 | `LabelsAsync` | `POST /{carrier}/labels` | Gets a fresh label URL for one package |
 | `OrderViewLabelsAsync` | `GET /{carrier}/orderview/{order_id}` | Gets the label URL of a closed order |
 | `DownloadLabelAsync` | `GET` the label URL | Downloads the label body |
+| `DownloadBatchLabelsAsync` | `POST /{carrier}/labels` | Gets and downloads the labels of one or more packages |
 | `TrackStatusAsync` | `POST /{carrier}/trackstatus` | Reads the tracking status of one package |
 | `OrderBatchAsync` | `POST /{carrier}/order` | Hands one package to the carrier batch |
 | `DropPackageAsync` | `POST /{carrier}/drop` | Removes one package before ORDER |
@@ -75,6 +76,7 @@ Console.WriteLine(status.StatusText);
 | `CodAsync` | `GET /{carrier}/cod4services` | Lists the cash-on-delivery destinations |
 | `CarrierCapabilitiesAsync` | `GET` the discovery endpoints | Discovers the contracted carriers and services |
 | `ResolveBranchId` | none | Chooses the branch id or the branch zip for an ADD request |
+| `ParseTrackingNotifications` | none | Parses a tracking webhook body into typed notifications |
 
 ## Codes
 
@@ -138,9 +140,9 @@ The client never retries a request. The caller controls the retry policy.
 ## Response limits
 
 The client reads every JSON body with a hard limit of 8 MiB. Set
-`BalikobotConfig.MaxResponseBytes` to change the limit. Label downloads use a
-fixed limit of 4 MiB. The client refuses redirects. It checks the response
-`Content-Type` before it decodes the body.
+`BalikobotConfig.MaxResponseBytes` to change the limit. Label and batch label
+downloads use a fixed limit of 4 MiB. The client refuses redirects. It checks
+the response `Content-Type` before it decodes the body.
 
 ## Custom HTTP client
 
@@ -171,6 +173,36 @@ base URL origin for a loopback test server. The default allowlist accepts every
 `https` URL on `balikobot.cz` or a subdomain. Set `BalikobotConfig.LabelHosts`
 to replace the default allowlist with other hosts. A leading dot selects a
 subdomain suffix match. It does not match the bare domain.
+
+## Batch labels
+
+`DownloadBatchLabelsAsync` requests fresh labels for one or more packages and
+downloads the label body in one step. A single package id returns a PDF or ZPL
+body; several package ids return a ZIP archive. The method uses the label host
+allowlist and the fixed 4 MiB label limit, and it accepts 1 to 1000 package ids
+per request.
+
+```csharp
+var labels = await client.DownloadBatchLabelsAsync(CarrierCode.PPL, [result.PackageId, secondPackageId]);
+await File.WriteAllBytesAsync(labels.MediaType == "application/zip" ? "labels.zip" : "label.pdf", labels.Bytes);
+```
+
+## Tracking webhooks
+
+`ParseTrackingNotifications` turns the body of a Balíkobot tracking webhook
+into typed notifications. It accepts a single JSON object or an array of
+objects. Every entry must identify the package through `package_id`, `eid` or
+`carrier_id` and carry a decimal `status_id` or `status_id_v2` together with a
+status description in `name` or `status_text`. A malformed body or a missing
+required field throws a `BalikobotException` with `BalikobotError.InvalidResponse`.
+
+```csharp
+var notifications = BalikobotClient.ParseTrackingNotifications(body);
+foreach (var notification in notifications)
+{
+    Console.WriteLine($"{notification.CarrierId}: {notification.StatusId} {notification.StatusText}");
+}
+```
 
 ## Parity notes
 

@@ -1,3 +1,16 @@
+## [Unreleased]
+
+### Added
+
+- Batch label export through `DownloadBatchLabelsAsync`. It requests fresh
+  labels for 1 to 1000 package ids, follows the returned label URL and
+  validates the body. A single package id returns a PDF or ZPL body; several
+  package ids return a ZIP archive.
+- Typed tracking webhook parsing through `TrackingNotification` and
+  `ParseTrackingNotifications`. The parser accepts a single status-change
+  object or an array of objects and rejects malformed input with
+  `BalikobotError.InvalidResponse`.
+
 ## 0.1.1
 
 - Documentation and internal cleanup.

@@ -333,10 +333,15 @@ public class ShipmentTests
     [Fact]
     public void ResolveBranchIdFollowsTheCarrierRules()
     {
-        Assert.Equal("11000", BalikobotClient.ResolveBranchId(CarrierCode.CP, "NP", "BR-1", "110 00"));
-        Assert.Equal("11000", BalikobotClient.ResolveBranchId(CarrierCode.ULOZENKA, "CP_NP", "BR-1", "110 00"));
-        Assert.Equal("BR-1", BalikobotClient.ResolveBranchId(CarrierCode.ULOZENKA, "OTHER", "BR-1", "110 00"));
         Assert.Equal("123", BalikobotClient.ResolveBranchId(CarrierCode.PPL, "1", "KM123", ""));
+        Assert.Equal("456", BalikobotClient.ResolveBranchId(CarrierCode.PPL, "1", "456", ""));
+        Assert.Equal("13000", BalikobotClient.ResolveBranchId(CarrierCode.CP, "NP", "BR-1", "130 00"));
+        Assert.Equal("81101", BalikobotClient.ResolveBranchId(CarrierCode.SP, "NP", "BR-1", "811 01"));
+        Assert.Equal("13000", BalikobotClient.ResolveBranchId(CarrierCode.ULOZENKA, "CP_NP", "BR-1", "130 00"));
+        Assert.Equal("BR-1", BalikobotClient.ResolveBranchId(CarrierCode.ULOZENKA, "OTHER", "BR-1", "130 00"));
+        Assert.Equal("42", BalikobotClient.ResolveBranchId(CarrierCode.INTIME, "1", "42", ""));
+        Assert.Equal("123", BalikobotClient.ResolveBranchId(CarrierCode.ZASILKOVNA, "1", "123", ""));
+        Assert.Equal("99", BalikobotClient.ResolveBranchId(CarrierCode.DPD, "1", "99", ""));
     }
 
     private static AddPackageRequest Request()

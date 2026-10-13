@@ -10,6 +10,7 @@ internal static class ShipmentWire
     internal const int IdentifierLimit = 100;
     internal const int AddFieldLimit = 255;
     internal const int LabelResponseLimit = 4 * 1024 * 1024;
+    internal const int LabelsPackageLimit = 1000;
 
     internal readonly record struct AddEntry(
         string Eid,
@@ -413,9 +414,18 @@ internal static class ShipmentWire
         }
     }
 
-    internal static async Task<DownloadedLabel> DownloadLabelAsync(
+    internal static Task<DownloadedLabel> DownloadLabelAsync(
         BalikobotClient client,
         string labelUrl,
+        CancellationToken cancellationToken)
+    {
+        return FetchLabelAsync(client, labelUrl, false, cancellationToken);
+    }
+
+    internal static async Task<DownloadedLabel> FetchLabelAsync(
+        BalikobotClient client,
+        string labelUrl,
+        bool multiple,
         CancellationToken cancellationToken)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, labelUrl);
@@ -476,7 +486,8 @@ internal static class ShipmentWire
 
             var pdf = string.Equals(mediaType, "application/pdf", StringComparison.OrdinalIgnoreCase);
             var zpl = string.Equals(mediaType, "application/zpl", StringComparison.OrdinalIgnoreCase);
-            if (!pdf && !zpl)
+            var zip = string.Equals(mediaType, "application/zip", StringComparison.OrdinalIgnoreCase);
+            if (multiple ? !zip : !pdf && !zpl)
             {
                 throw Error(BalikobotError.InvalidResponse);
             }
@@ -486,13 +497,18 @@ internal static class ShipmentWire
                 throw Error(BalikobotError.InvalidResponse);
             }
 
-            var prefix = pdf ? "%PDF-"u8 : "^X"u8;
+            var prefix = zip ? "PK"u8 : pdf ? "%PDF-"u8 : "^X"u8;
             if (!body.AsSpan().StartsWith(prefix))
             {
                 throw Error(BalikobotError.InvalidResponse);
             }
 
-            return new DownloadedLabel(body, pdf ? "application/pdf" : "application/zpl");
+            var canonicalType = zip
+                ? "application/zip"
+                : pdf
+                    ? "application/pdf"
+                    : "application/zpl";
+            return new DownloadedLabel(body, canonicalType);
         }
     }
 
