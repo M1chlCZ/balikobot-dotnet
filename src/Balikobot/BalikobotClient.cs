@@ -290,7 +290,8 @@ public sealed class BalikobotClient : IDisposable
                 HttpMethod.Post,
                 "/" + carrierCode + "/add",
                 new { packages = new[] { normalized } },
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken,
+                readErrorBody: true).ConfigureAwait(false);
         }
         catch (RequestFailureException exception)
         {
@@ -300,27 +301,61 @@ public sealed class BalikobotClient : IDisposable
                 : BalikobotError.Ambiguous);
         }
 
-        if (response.Status == 429)
+        var json = Wire.IsJson(response);
+        var statusError = response.Status switch
         {
-            throw ShipmentWire.Unavailable(Wire.RetryAfter(response));
-        }
-
-        if (response.Status >= 500)
-        {
-            throw ShipmentWire.Error(BalikobotError.Unavailable);
-        }
-
-        if (response.Status != 200)
-        {
-            throw ShipmentWire.Error(response.Status is >= 200 and < 300
+            429 => ShipmentWire.Unavailable(Wire.RetryAfter(response)),
+            >= 500 => ShipmentWire.Error(BalikobotError.Unavailable),
+            not 200 => ShipmentWire.Error(response.Status is >= 200 and < 300
                 ? BalikobotError.Ambiguous
                 : response.Status is >= 400 and < 500
                     ? BalikobotError.Rejected
-                    : BalikobotError.InvalidResponse);
+                    : BalikobotError.InvalidResponse),
+            _ when !json => ShipmentWire.Error(BalikobotError.Ambiguous),
+            _ => null,
+        };
+        if (statusError is not null)
+        {
+            if (response.Status is < 400 or >= 600 || !json)
+            {
+                throw statusError;
+            }
+
+            if (ShipmentWire.TryDecodeAddOutage(response.Body, request.Eid))
+            {
+                throw ShipmentWire.Error(BalikobotError.CarrierOutage);
+            }
+
+            throw statusError;
         }
 
-        if (!Wire.IsJson(response) ||
-            !ShipmentWire.TryDecodeAdd(response.Body, out var status, out var packages) ||
+        AddPackageResult? result = null;
+        BalikobotException? decodeError = null;
+        try
+        {
+            result = DecodeAddPackage(response.Body, request.Eid);
+        }
+        catch (BalikobotException exception)
+        {
+            decodeError = exception;
+        }
+
+        if (result is not null)
+        {
+            return result;
+        }
+
+        if (ShipmentWire.TryDecodeAddOutage(response.Body, request.Eid))
+        {
+            throw ShipmentWire.Error(BalikobotError.CarrierOutage);
+        }
+
+        throw decodeError!;
+    }
+
+    private AddPackageResult DecodeAddPackage(byte[] body, string requestEid)
+    {
+        if (!ShipmentWire.TryDecodeAdd(body, out var status, out var packages) ||
             status is null)
         {
             throw ShipmentWire.Error(BalikobotError.Ambiguous);
@@ -333,7 +368,7 @@ public sealed class BalikobotClient : IDisposable
                 : topError);
         }
 
-        if (packages.Count != 1 || packages[0].Eid != request.Eid)
+        if (packages.Count != 1 || packages[0].Eid != requestEid)
         {
             throw ShipmentWire.Error(BalikobotError.Ambiguous);
         }
@@ -422,7 +457,11 @@ public sealed class BalikobotClient : IDisposable
 
         if (response.Status != 200 ||
             !Wire.IsJson(response) ||
-            !ShipmentWire.TryDecodeOverview(response.Body, out var status, out var packages))
+            !ShipmentWire.TryDecodeOverview(
+                response.Body,
+                out var status,
+                out var hasPackages,
+                out var packages))
         {
             throw ShipmentWire.Error(response.Status is >= 400 and < 500
                 ? BalikobotError.Rejected
@@ -432,6 +471,11 @@ public sealed class BalikobotClient : IDisposable
         if (status is { } value && ShipmentWire.TopLevelStatusError(value) is { } topError)
         {
             throw ShipmentWire.Error(topError);
+        }
+
+        if (!hasPackages)
+        {
+            throw ShipmentWire.Error(BalikobotError.InvalidResponse);
         }
 
         var result = new List<OverviewPackage>(packages.Count);

@@ -125,6 +125,71 @@ public class ShipmentTests
         Assert.Empty(handler.Requests);
     }
 
+    [Theory]
+    [InlineData(HttpStatusCode.BadRequest,
+        "{\"status\":400,\"packages\":[{\"eid\":\"ORDER-0001\",\"status\":400,\"errors\":[{\"attribute\":\"carrier_error\"}],\"package_id\":null}]}")]
+    [InlineData(HttpStatusCode.OK,
+        "{\"status\":400,\"packages\":[{\"eid\":\"ORDER-0001\",\"status\":\"400\",\"errors\":[{\"attribute\":\"carrier_error\"}]}]}")]
+    [InlineData(HttpStatusCode.ServiceUnavailable,
+        "{\"status\":503,\"packages\":[{\"eid\":\"ORDER-0001\",\"status\":503,\"errors\":[{\"attribute\":\"carrier_error\"}]}]}")]
+    public async Task AddPackageReportsACarrierOutageAsAmbiguous(HttpStatusCode status, string body)
+    {
+        var handler = new FakeHandler(_ => Bytes(Encoding.UTF8.GetBytes(body), "application/json", status));
+        using var httpClient = new HttpClient(handler);
+        using var client = CreateClient(httpClient);
+
+        var exception = await Assert.ThrowsAsync<BalikobotException>(
+            () => client.AddPackageAsync(CarrierCode.PPL, Request()));
+
+        Assert.Equal(BalikobotError.CarrierOutage, exception.Error);
+        Assert.True(exception.RequiresReconciliation);
+    }
+
+    [Fact]
+    public async Task AddPackageKeepsTheHttpErrorForAnotherEid()
+    {
+        var handler = new FakeHandler(_ => Bytes(
+            Encoding.UTF8.GetBytes(
+                "{\"status\":400,\"packages\":[{\"eid\":\"OTHER\",\"status\":400,\"errors\":[{\"attribute\":\"carrier_error\"}]}]}"),
+            "application/json",
+            HttpStatusCode.BadRequest));
+        using var httpClient = new HttpClient(handler);
+        using var client = CreateClient(httpClient);
+
+        var exception = await Assert.ThrowsAsync<BalikobotException>(
+            () => client.AddPackageAsync(CarrierCode.PPL, Request()));
+
+        Assert.Equal(BalikobotError.Rejected, exception.Error);
+    }
+
+    [Theory]
+    [InlineData("{}")]
+    [InlineData("{\"status\":200}")]
+    [InlineData("{\"status\":\"208\",\"packages\":null}")]
+    public async Task OverviewRequiresAnExplicitPackageList(string body)
+    {
+        var handler = new FakeHandler(_ => Json(body));
+        using var httpClient = new HttpClient(handler);
+        using var client = CreateClient(httpClient);
+
+        var exception = await Assert.ThrowsAsync<BalikobotException>(
+            () => client.OverviewAsync(CarrierCode.PPL, "ORDER-0001"));
+
+        Assert.Equal(BalikobotError.InvalidResponse, exception.Error);
+    }
+
+    [Fact]
+    public async Task OverviewAcceptsAnExplicitEmptyPackageList()
+    {
+        var handler = new FakeHandler(_ => Json("{\"status\":200,\"packages\":[]}"));
+        using var httpClient = new HttpClient(handler);
+        using var client = CreateClient(httpClient);
+
+        var packages = await client.OverviewAsync(CarrierCode.PPL, "ORDER-0001");
+
+        Assert.Empty(packages);
+    }
+
     [Fact]
     public void ValidFieldTreatsNullAsInvalid()
     {

@@ -17,6 +17,9 @@ public sealed class BalikobotException : Exception
     /// <summary>Gets the error classification.</summary>
     public BalikobotError Error { get; }
 
+    /// <summary>Gets whether the call may have reached the provider and the result must be reconciled before a retry.</summary>
+    public bool RequiresReconciliation => Error is BalikobotError.Ambiguous or BalikobotError.CarrierOutage;
+
     /// <summary>Gets the provider retry hint, or <see langword="null"/> when the provider sent none.</summary>
     public TimeSpan? RetryAfter { get; }
 }

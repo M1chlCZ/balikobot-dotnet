@@ -39,7 +39,8 @@ internal static class Wire
         HttpMethod method,
         string path,
         object? body,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool readErrorBody = false)
     {
         if (method != HttpMethod.Get)
         {
@@ -71,11 +72,22 @@ internal static class Wire
                 .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
                 .ConfigureAwait(false);
             var status = (int)response.StatusCode;
-            var bytes = status == 200
-                ? await ReadLimitedBodyAsync(response.Content, client.MaxResponseBytes, cancellationToken)
-                    .ConfigureAwait(false)
-                : [];
             var contentType = response.Content.Headers.ContentType?.ToString();
+            var isJson = TryParseMediaType(contentType, out var mediaType) &&
+                string.Equals(mediaType, "application/json", StringComparison.OrdinalIgnoreCase);
+            byte[] bytes = [];
+            if (status == 200 || (readErrorBody && status is >= 400 and < 600 && isJson))
+            {
+                try
+                {
+                    bytes = await ReadLimitedBodyAsync(response.Content, client.MaxResponseBytes, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                catch (RequestFailureException) when (status != 200)
+                {
+                    bytes = [];
+                }
+            }
 
             return new RawResponse(status, response.Headers, bytes, contentType);
         }

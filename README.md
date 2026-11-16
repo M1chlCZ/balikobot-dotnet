@@ -1,7 +1,7 @@
 # Balikobot
 
-A .NET client for the Balíkobot shipping API v2. The client uses only the .NET
-base class library. It covers branches, packages, labels, batch labels,
+Balikobot is a .NET client for the Balíkobot shipping API v2. It uses only the
+base class library and covers branches, packages, labels, batch labels,
 tracking, tracking webhooks, pickup orders and account capabilities.
 
 ## Install
@@ -119,6 +119,7 @@ statement or an `if` statement.
 | `Unavailable` | The provider is unavailable, or the request never left the client. | Retry later. |
 | `NotFound` | The carrier has no tracking data yet. | Poll again later. |
 | `Ambiguous` | A mutating call can have reached the provider. | Reconcile with `OverviewAsync`. Then retry. |
+| `CarrierOutage` | The carrier reported an error for the `eid` during `AddPackageAsync`, so the package may exist. | Reconcile with `OverviewAsync`. Then retry. |
 | `InvalidResponse` | The answer violates the protocol. | Inspect the provider. Do not retry blindly. |
 | `Config` | The client configuration is not valid. | Correct the configuration. |
 | `InvalidCode` | A typed code value is malformed. | Correct the code. |
@@ -141,7 +142,7 @@ The client never retries a request. The caller controls the retry policy.
 
 The client reads every JSON body with a hard limit of 8 MiB. Set
 `BalikobotConfig.MaxResponseBytes` to change the limit. Label and batch label
-downloads use a fixed limit of 4 MiB. The client refuses redirects. It checks
+downloads use a fixed limit of 4 MiB. The client refuses redirects and checks
 the response `Content-Type` before it decodes the body.
 
 ## Custom HTTP client

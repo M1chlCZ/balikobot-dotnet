@@ -13,6 +13,8 @@ public enum BalikobotError
     NotFound,
     /// <summary>A mutating call has an unknown outcome; reconcile before any retry.</summary>
     Ambiguous,
+    /// <summary>The carrier reported an error during ADD, so the package may exist; reconcile before any retry.</summary>
+    CarrierOutage,
     /// <summary>The provider answer violates the protocol.</summary>
     InvalidResponse,
     /// <summary>The client configuration is invalid.</summary>

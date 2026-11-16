@@ -297,9 +297,58 @@ internal static class ShipmentWire
         }
     }
 
-    internal static bool TryDecodeOverview(byte[] body, out int? status, out List<OverviewEntry> packages)
+    internal static bool TryDecodeAddOutage(byte[] body, string eid)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(body);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object ||
+                !root.TryGetProperty("packages", out var list) ||
+                list.ValueKind != JsonValueKind.Array ||
+                list.GetArrayLength() != 1)
+            {
+                return false;
+            }
+
+            var entry = list[0];
+            if (entry.ValueKind != JsonValueKind.Object ||
+                !TryReadString(entry, "eid", out var entryEid) ||
+                entryEid != eid ||
+                !TryReadStatus(entry, out var status) ||
+                status is not (>= 400 and < 600) ||
+                !entry.TryGetProperty("errors", out var errors) ||
+                errors.ValueKind != JsonValueKind.Array)
+            {
+                return false;
+            }
+
+            foreach (var issue in errors.EnumerateArray())
+            {
+                if (issue.ValueKind == JsonValueKind.Object &&
+                    TryReadString(issue, "attribute", out var attribute) &&
+                    attribute == "carrier_error")
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    internal static bool TryDecodeOverview(
+        byte[] body,
+        out int? status,
+        out bool hasPackages,
+        out List<OverviewEntry> packages)
     {
         status = null;
+        hasPackages = false;
         packages = [];
         try
         {
@@ -315,6 +364,7 @@ internal static class ShipmentWire
                 return true;
             }
 
+            hasPackages = true;
             if (list.ValueKind != JsonValueKind.Array)
             {
                 return false;
@@ -675,6 +725,7 @@ internal static class ShipmentWire
             BalikobotError.Rejected => "balikobot: provider permanently rejected the request",
             BalikobotError.Unavailable => "balikobot: temporarily unavailable",
             BalikobotError.Ambiguous => "balikobot: request outcome is unknown",
+            BalikobotError.CarrierOutage => "balikobot: carrier reported an error during ADD",
             _ => "balikobot: invalid provider response",
         };
     }
