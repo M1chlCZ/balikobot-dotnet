@@ -1,3 +1,14 @@
+## [0.2.1] - 2026-11-16
+
+### Fixed
+
+- `AddPackageAsync` reports a matching package's `carrier_error` as
+  `BalikobotError.CarrierOutage`, including in HTTP error responses.
+  `RequiresReconciliation` covers it, so reconcile with `OverviewAsync`
+  before another attempt.
+- `OverviewAsync` requires an explicit package array. A missing or null array
+  reports `BalikobotError.InvalidResponse` instead of an empty list.
+
 ## [0.2.0] - 2026-10-13
 
 ### Added
